@@ -28,6 +28,7 @@ def test_save_and_load_config_roundtrip(tmp_path: Path) -> None:
     assert grant.resolved_path == (tmp_path / "project").resolve(strict=False)
     assert loaded.auth_token
     assert loaded.enable_codex_tasks is False
+    assert loaded.trust_mode == "restricted"
 
 
 def test_add_grant_replaces_same_resolved_path(tmp_path: Path) -> None:
@@ -53,3 +54,13 @@ def test_add_grant_replaces_same_resolved_path(tmp_path: Path) -> None:
     assert len(second.grants) == 1
     assert second.grants[0].name == "second"
     assert second.grants[0].write is True
+
+
+def test_full_delegate_trust_mode_roundtrip(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config = BridgeConfig(trust_mode="full_delegate")
+
+    save_config(config, config_path)
+    loaded = load_config(config_path)
+
+    assert loaded.trust_mode == "full_delegate"

@@ -84,15 +84,22 @@ If you use a tunnel, prefer a named/authenticated tunnel or another access-contr
 ## Tools
 
 - `bridge_status`: check bridge health and available capabilities.
+- `set_bridge_mode`: switch between restricted grants and full delegate mode.
+- `grant_path`: add a persisted read/write/execute grant from ChatGPT.
+- `revoke_grant`: remove a persisted grant from ChatGPT.
 - `list_grants`: show approved directories and permissions.
 - `search_files`: search readable grants with ripgrep.
 - `read_file`: read a UTF-8 text file inside a readable grant.
 - `write_file`: write text inside a writable grant.
 - `codex_task_run`: ask local Codex to work in an executable grant. This tool is hidden and disabled by default.
+- `codex_session_start`: start a persistent local Codex session for project work.
+- `codex_session_continue`: continue a recorded local Codex session.
+- `codex_session_list`: list recorded local Codex sessions.
+- `codex_session_status`: inspect one recorded local Codex session.
 
 ## Permission Model
 
-Access is denied by default. The user grants directories:
+Access is denied by default. The default trust mode is `restricted`, where the user grants directories:
 
 ```bash
 codex-chatgpt-bridge grant ~/Documents --name documents
@@ -120,6 +127,24 @@ codex-chatgpt-bridge disable-codex-tasks
 
 Even inside approved grants, the bridge refuses paths that look like secrets, including `.env`, `.ssh`, private keys, certificates, token files, and credential-like names.
 
+### Full Delegate Mode
+
+For a personal machine where you explicitly want ChatGPT web to act as the planning brain and local Codex as the device agent, switch the bridge into full delegate mode:
+
+```bash
+codex-chatgpt-bridge set-mode full_delegate
+codex-chatgpt-bridge enable-codex-tasks
+```
+
+In `full_delegate` mode, the bridge no longer requires path grants and no longer blocks sensitive-looking paths. The connector can ask the bridge to read, write, and execute anywhere the local bridge process can access. Codex session tools default to `danger_full_access`, which runs local Codex without approval prompts or sandboxing.
+
+Use this only when the connector URL is private and you intentionally trust the ChatGPT session that will call it. To return to the safer default:
+
+```bash
+codex-chatgpt-bridge set-mode restricted
+codex-chatgpt-bridge disable-codex-tasks
+```
+
 ## macOS Service
 
 ```bash
@@ -139,6 +164,7 @@ Logs are written to:
 - Prefer project-level grants over full-home or full-disk grants.
 - Review ChatGPT tool calls before allowing broad write or execute behavior.
 - Keep `codex_task_run` disabled unless you explicitly need local Codex execution from ChatGPT.
+- Treat `full_delegate` as device-agent mode: it is powerful enough to modify files and run Codex on your local machine.
 
 ## Development
 
@@ -234,15 +260,22 @@ codex-chatgpt-bridge print-chatgpt-setup --show-token
 ## 可用工具
 
 - `bridge_status`：查看桥是否在线。
+- `set_bridge_mode`：在 restricted 授权模式和 full delegate 模式之间切换。
+- `grant_path`：让 ChatGPT 添加持久化读/写/执行授权。
+- `revoke_grant`：让 ChatGPT 删除持久化授权。
 - `list_grants`：查看用户授权的目录和权限。
 - `search_files`：用 ripgrep 搜索可读授权目录。
 - `read_file`：读取可读授权目录内的 UTF-8 文本文件。
 - `write_file`：写入可写授权目录内的文本文件。
 - `codex_task_run`：让本地 Codex 在可执行授权目录中完成一个任务。这个工具默认隐藏且禁用。
+- `codex_session_start`：启动一个可持续的本地 Codex session。
+- `codex_session_continue`：继续一个已记录的本地 Codex session。
+- `codex_session_list`：列出桥记录的本地 Codex session。
+- `codex_session_status`：查看某个本地 Codex session 的状态。
 
 ## 权限模型
 
-默认拒绝访问。用户必须显式授权目录：
+默认拒绝访问。默认 trust mode 是 `restricted`，用户必须显式授权目录：
 
 ```bash
 codex-chatgpt-bridge grant ~/Documents --name documents
@@ -270,6 +303,24 @@ codex-chatgpt-bridge disable-codex-tasks
 
 即使在授权目录内，桥也会拒绝看起来像密钥或凭证的路径，例如 `.env`、`.ssh`、私钥、证书、token 文件和 credential 类文件名。
 
+### Full Delegate 模式
+
+如果这是你自己的机器，并且你明确希望 ChatGPT 网页端做总控大脑、本地 Codex 做设备 agent，可以切到 full delegate：
+
+```bash
+codex-chatgpt-bridge set-mode full_delegate
+codex-chatgpt-bridge enable-codex-tasks
+```
+
+在 `full_delegate` 下，桥不再要求路径 grant，也不再拦截看起来像密钥的路径。connector 可以要求桥读取、写入、执行本地 bridge 进程能访问的任何路径。Codex session 工具默认使用 `danger_full_access`，也就是让本地 Codex 不经审批、无沙盒执行。
+
+只有在 connector URL 保密，并且你信任会调用它的 ChatGPT session 时才使用这个模式。恢复安全默认值：
+
+```bash
+codex-chatgpt-bridge set-mode restricted
+codex-chatgpt-bridge disable-codex-tasks
+```
+
 ## macOS 常驻服务
 
 ```bash
@@ -289,6 +340,7 @@ codex-chatgpt-bridge install-launch-agent --load
 - 优先给单个项目目录授权，而不是给整个 home 或全盘授权。
 - 在开启大范围写入或执行权限前，认真审查 ChatGPT 的工具调用。
 - 除非确实需要 ChatGPT 调本地 Codex，否则保持 `codex_task_run` 禁用。
+- 把 `full_delegate` 当作设备 agent 模式看待：它足够强，可以修改本地文件并驱动本地 Codex。
 
 ## 开发
 

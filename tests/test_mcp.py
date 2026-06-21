@@ -24,8 +24,11 @@ def test_tools_list_includes_core_tools(tmp_path: Path) -> None:
     names = {tool["name"] for tool in response.json()["result"]["tools"]}
     assert {
         "bridge_status",
+        "grant_path",
         "list_grants",
+        "revoke_grant",
         "search_files",
+        "set_bridge_mode",
         "read_file",
         "write_file",
     } <= names
@@ -110,6 +113,12 @@ def test_codex_task_tool_requires_explicit_enable(tmp_path: Path) -> None:
 
     names = {tool["name"] for tool in response.json()["result"]["tools"]}
     assert "codex_task_run" in names
+    assert {
+        "codex_session_start",
+        "codex_session_continue",
+        "codex_session_list",
+        "codex_session_status",
+    } <= names
 
 
 def test_tools_call_read_file(tmp_path: Path) -> None:
@@ -132,3 +141,77 @@ def test_tools_call_read_file(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert response.json()["result"]["structuredContent"]["text"] == "local text"
+
+
+def test_tools_call_set_bridge_mode_and_grant_path(tmp_path: Path) -> None:
+    config_path = tmp_path / "bridge.toml"
+    project = tmp_path / "project"
+    project.mkdir()
+    config = BridgeConfig(auth_token="test-token")
+    app = create_app(LocalGateway(config, config_path=config_path))
+    client = TestClient(app)
+
+    mode_response = client.post(
+        "/mcp",
+        headers={"Authorization": "Bearer test-token"},
+        json={
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "set_bridge_mode",
+                "arguments": {"mode": "full_delegate"},
+            },
+        },
+    )
+    grant_response = client.post(
+        "/mcp",
+        headers={"Authorization": "Bearer test-token"},
+        json={
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "name": "grant_path",
+                "arguments": {
+                    "path": str(project),
+                    "name": "project",
+                    "read": True,
+                    "write": True,
+                    "execute": True,
+                },
+            },
+        },
+    )
+
+    assert mode_response.status_code == 200
+    assert grant_response.status_code == 200
+    assert mode_response.json()["result"]["structuredContent"]["trust_mode"] == "full_delegate"
+    assert grant_response.json()["result"]["structuredContent"]["grant"]["execute"] is True
+
+
+def test_tools_call_grant_path_defaults_to_read_only(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    config = BridgeConfig(auth_token="test-token")
+    app = create_app(LocalGateway(config, config_path=tmp_path / "bridge.toml"))
+    client = TestClient(app)
+
+    response = client.post(
+        "/mcp",
+        headers={"Authorization": "Bearer test-token"},
+        json={
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": {
+                "name": "grant_path",
+                "arguments": {"path": str(project)},
+            },
+        },
+    )
+
+    grant = response.json()["result"]["structuredContent"]["grant"]
+    assert grant["read"] is True
+    assert grant["write"] is False
+    assert grant["execute"] is False

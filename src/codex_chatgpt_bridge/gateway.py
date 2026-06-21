@@ -5,13 +5,29 @@ from __future__ import annotations
 import asyncio
 import shutil
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
+from uuid import uuid4
 
-from .config import BridgeConfig, BridgeGrant
+from .codex_sessions import (
+    CodexSessionRecord,
+    CodexSessionStore,
+    default_session_store_path,
+    extract_codex_session_id,
+)
+from .config import (
+    BridgeConfig,
+    BridgeGrant,
+    TrustMode,
+    add_grant,
+    default_config_path,
+    save_config,
+)
 from .security import is_relative_to, is_sensitive_path, resolve_user_path
 
 SandboxMode = Literal["read_only", "workspace_write"]
+CodexSessionSandboxMode = Literal["read_only", "workspace_write", "danger_full_access"]
 JsonObject = dict[str, Any]
 
 
@@ -22,8 +38,18 @@ class BridgeError(RuntimeError):
 class LocalGateway:
     """Authorize local actions and execute them for the MCP layer."""
 
-    def __init__(self, config: BridgeConfig) -> None:
+    def __init__(
+        self,
+        config: BridgeConfig,
+        *,
+        config_path: Path | None = None,
+        session_store_path: Path | None = None,
+    ) -> None:
         self._config = config
+        self._config_path = config_path or default_config_path()
+        self._session_store = CodexSessionStore(
+            session_store_path or default_session_store_path(self._config_path)
+        )
 
     @property
     def config(self) -> BridgeConfig:
@@ -38,16 +64,30 @@ class LocalGateway:
             "status": "ok",
             "host": self._config.host,
             "port": self._config.port,
+            "trust_mode": self._config.trust_mode,
             "grant_count": len(self._config.grants),
             "auth_required": True,
             "codex_tasks_enabled": self._config.enable_codex_tasks,
             "tools": [
                 "bridge_status",
+                "set_bridge_mode",
+                "grant_path",
+                "revoke_grant",
                 "list_grants",
                 "search_files",
                 "read_file",
                 "write_file",
                 *(["codex_task_run"] if self._config.enable_codex_tasks else []),
+                *(
+                    [
+                        "codex_session_start",
+                        "codex_session_continue",
+                        "codex_session_list",
+                        "codex_session_status",
+                    ]
+                    if self._config.enable_codex_tasks
+                    else []
+                ),
             ],
         }
 
@@ -55,6 +95,8 @@ class LocalGateway:
         """List configured grants."""
 
         return {
+            "trust_mode": self._config.trust_mode,
+            "full_delegate": self._config.trust_mode == "full_delegate",
             "grants": [
                 {
                     "name": grant.name,
@@ -64,8 +106,63 @@ class LocalGateway:
                     "execute": grant.execute,
                 }
                 for grant in self._config.grants
-            ]
+            ],
         }
+
+    async def set_bridge_mode(self, *, mode: TrustMode) -> JsonObject:
+        """Set and persist the bridge trust mode."""
+
+        if mode not in {"restricted", "full_delegate"}:
+            raise BridgeError("mode must be restricted or full_delegate")
+        self._config = self._config.model_copy(update={"trust_mode": mode})
+        self._save_runtime_config()
+        return {
+            "trust_mode": self._config.trust_mode,
+            "full_delegate": self._config.trust_mode == "full_delegate",
+        }
+
+    async def grant_path(
+        self,
+        *,
+        path: str,
+        name: str | None = None,
+        read: bool = True,
+        write: bool = False,
+        execute: bool = False,
+    ) -> JsonObject:
+        """Grant a local path at runtime and persist the config."""
+
+        self._config = add_grant(
+            self._config,
+            path=Path(path),
+            name=name,
+            read=read,
+            write=write,
+            execute=execute,
+        )
+        self._save_runtime_config()
+        grant = self._matching_grant(resolve_user_path(path))
+        if grant is None:
+            raise BridgeError(f"failed to persist grant: {path}")
+        return {
+            "grant": {
+                "name": grant.name,
+                "path": str(grant.resolved_path),
+                "read": grant.read,
+                "write": grant.write,
+                "execute": grant.execute,
+            }
+        }
+
+    async def revoke_grant(self, *, path: str) -> JsonObject:
+        """Remove a local path grant at runtime and persist the config."""
+
+        resolved = resolve_user_path(path)
+        before = len(self._config.grants)
+        grants = [grant for grant in self._config.grants if grant.resolved_path != resolved]
+        self._config = self._config.model_copy(update={"grants": grants})
+        self._save_runtime_config()
+        return {"path": str(resolved), "removed": len(grants) < before}
 
     async def read_file(self, *, path: str, max_chars: int | None = None) -> JsonObject:
         """Read an approved UTF-8 file."""
@@ -134,6 +231,106 @@ class LocalGateway:
             if len(matches) >= max_results:
                 break
         return {"query": query, "matches": matches, "truncated": len(matches) >= max_results}
+
+    async def codex_session_start(
+        self,
+        *,
+        prompt: str,
+        cwd: str,
+        sandbox_mode: CodexSessionSandboxMode = "danger_full_access",
+        wait_timeout_s: float = 600.0,
+    ) -> JsonObject:
+        """Start a persisted local Codex session and return its bridge handle."""
+
+        if not self._config.enable_codex_tasks:
+            raise BridgeError(
+                "codex session tools are disabled; enable codex tasks in the bridge config"
+            )
+        if not prompt.strip():
+            raise BridgeError("prompt must not be empty")
+        resolved_cwd = self._authorize_codex_cwd(cwd, sandbox_mode)
+        output_path = self._new_output_path()
+        command = [
+            self._codex_path(),
+            "exec",
+            "--cd",
+            str(resolved_cwd),
+            "--json",
+            "--output-last-message",
+            str(output_path),
+            *self._codex_permission_args(sandbox_mode),
+            prompt,
+        ]
+        return await self._finish_codex_session_run(
+            command=command,
+            output_path=output_path,
+            wait_timeout_s=wait_timeout_s,
+            prompt=prompt,
+            cwd=resolved_cwd,
+            existing_record=None,
+            sandbox_mode=sandbox_mode,
+        )
+
+    async def codex_session_continue(
+        self,
+        *,
+        prompt: str,
+        bridge_session_id: str = "latest",
+        sandbox_mode: CodexSessionSandboxMode = "danger_full_access",
+        wait_timeout_s: float = 600.0,
+    ) -> JsonObject:
+        """Continue a persisted local Codex session."""
+
+        if not self._config.enable_codex_tasks:
+            raise BridgeError(
+                "codex session tools are disabled; enable codex tasks in the bridge config"
+            )
+        if not prompt.strip():
+            raise BridgeError("prompt must not be empty")
+        try:
+            record = self._session_store.resolve(bridge_session_id)
+        except KeyError as exc:
+            raise BridgeError(str(exc)) from exc
+        if not record.codex_session_id:
+            raise BridgeError(f"record has no Codex session id: {record.bridge_session_id}")
+        resolved_cwd = self._authorize_codex_cwd(record.cwd, sandbox_mode)
+        output_path = self._new_output_path()
+        command = [
+            self._codex_path(),
+            "exec",
+            "resume",
+            "--json",
+            "--output-last-message",
+            str(output_path),
+            *self._codex_resume_permission_args(sandbox_mode),
+            record.codex_session_id,
+            prompt,
+        ]
+        return await self._finish_codex_session_run(
+            command=command,
+            output_path=output_path,
+            wait_timeout_s=wait_timeout_s,
+            prompt=prompt,
+            cwd=resolved_cwd,
+            existing_record=record,
+            sandbox_mode=sandbox_mode,
+        )
+
+    async def codex_session_list(self) -> JsonObject:
+        """List Codex sessions known to the bridge."""
+
+        return {
+            "sessions": [record.model_dump(mode="json") for record in self._session_store.list()]
+        }
+
+    async def codex_session_status(self, *, bridge_session_id: str = "latest") -> JsonObject:
+        """Return one Codex session record."""
+
+        try:
+            record = self._session_store.resolve(bridge_session_id)
+        except KeyError as exc:
+            raise BridgeError(str(exc)) from exc
+        return {"session": record.model_dump(mode="json")}
 
     async def codex_task_run(
         self,
@@ -209,6 +406,124 @@ class LocalGateway:
             "stderr_tail": stderr_bytes.decode("utf-8", errors="replace")[-8000:],
         }
 
+    def _authorize_codex_cwd(self, cwd: str, sandbox_mode: CodexSessionSandboxMode) -> Path:
+        if sandbox_mode not in {"read_only", "workspace_write", "danger_full_access"}:
+            raise BridgeError(
+                "sandbox_mode must be read_only, workspace_write, or danger_full_access"
+            )
+        resolved_cwd = self._authorize(cwd, read=True, execute=True)
+        if sandbox_mode in {"workspace_write", "danger_full_access"}:
+            self._authorize(str(resolved_cwd), write=True)
+        return resolved_cwd
+
+    def _codex_path(self) -> str:
+        codex_path = shutil.which("codex")
+        if codex_path is None:
+            raise BridgeError("codex CLI was not found on PATH")
+        return codex_path
+
+    def _codex_permission_args(self, sandbox_mode: CodexSessionSandboxMode) -> list[str]:
+        if sandbox_mode == "danger_full_access":
+            return ["--dangerously-bypass-approvals-and-sandbox"]
+        sandbox = "workspace-write" if sandbox_mode == "workspace_write" else "read-only"
+        return ["--sandbox", sandbox]
+
+    def _codex_resume_permission_args(self, sandbox_mode: CodexSessionSandboxMode) -> list[str]:
+        if sandbox_mode == "danger_full_access":
+            return ["--dangerously-bypass-approvals-and-sandbox"]
+        return []
+
+    def _new_output_path(self) -> Path:
+        with tempfile.NamedTemporaryFile(
+            prefix="codex-chatgpt-bridge-",
+            suffix=".txt",
+            delete=False,
+        ) as handle:
+            return Path(handle.name)
+
+    async def _finish_codex_session_run(
+        self,
+        *,
+        command: list[str],
+        output_path: Path,
+        wait_timeout_s: float,
+        prompt: str,
+        cwd: Path,
+        existing_record: CodexSessionRecord | None,
+        sandbox_mode: CodexSessionSandboxMode,
+    ) -> JsonObject:
+        returncode, stdout, stderr = await self._run_codex_command(
+            command,
+            output_path,
+            wait_timeout_s,
+            cwd,
+        )
+        final_message = ""
+        if output_path.exists():
+            final_message = await asyncio.to_thread(
+                output_path.read_text,
+                encoding="utf-8",
+                errors="replace",
+            )
+            await asyncio.to_thread(output_path.unlink, missing_ok=True)
+        now = datetime.now(UTC).isoformat()
+        codex_session_id = extract_codex_session_id(stdout)
+        if codex_session_id is None and existing_record is not None:
+            codex_session_id = existing_record.codex_session_id
+        bridge_session_id = (
+            existing_record.bridge_session_id if existing_record is not None else str(uuid4())
+        )
+        record = CodexSessionRecord(
+            bridge_session_id=bridge_session_id,
+            codex_session_id=codex_session_id,
+            cwd=str(cwd),
+            created_at=existing_record.created_at if existing_record is not None else now,
+            updated_at=now,
+            last_prompt=prompt,
+            last_final_message=final_message,
+            last_returncode=returncode,
+        )
+        self._session_store.upsert(record)
+        return {
+            "bridge_session_id": record.bridge_session_id,
+            "codex_session_id": record.codex_session_id,
+            "cwd": record.cwd,
+            "sandbox_mode": sandbox_mode,
+            "returncode": returncode,
+            "final_message": final_message,
+            "stdout_tail": stdout[-8000:],
+            "stderr_tail": stderr[-8000:],
+        }
+
+    async def _run_codex_command(
+        self,
+        command: list[str],
+        output_path: Path,
+        wait_timeout_s: float,
+        cwd: Path,
+    ) -> tuple[int, str, str]:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(cwd),
+        )
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                process.communicate(),
+                timeout=wait_timeout_s,
+            )
+        except TimeoutError as exc:
+            process.kill()
+            await process.communicate()
+            await asyncio.to_thread(output_path.unlink, missing_ok=True)
+            raise BridgeError(f"codex session timed out after {wait_timeout_s} seconds") from exc
+        return (
+            process.returncode or 0,
+            stdout_bytes.decode("utf-8", errors="replace"),
+            stderr_bytes.decode("utf-8", errors="replace"),
+        )
+
     def _readable_roots(self) -> list[Path]:
         return [grant.resolved_path for grant in self._config.grants if grant.read]
 
@@ -221,6 +536,8 @@ class LocalGateway:
         execute: bool = False,
     ) -> Path:
         resolved = resolve_user_path(raw_path)
+        if self._config.trust_mode == "full_delegate":
+            return resolved
         if is_sensitive_path(resolved):
             raise BridgeError(f"refusing sensitive-looking path: {resolved}")
         grant = self._matching_grant(resolved)
@@ -241,6 +558,9 @@ class LocalGateway:
         if not matches:
             return None
         return max(matches, key=lambda grant: len(grant.resolved_path.parts))
+
+    def _save_runtime_config(self) -> None:
+        save_config(self._config, self._config_path)
 
     async def _run_rg(self, *, query: str, root: Path, remaining: int) -> list[JsonObject]:
         command = [

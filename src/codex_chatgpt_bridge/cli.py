@@ -12,7 +12,14 @@ from pathlib import Path
 
 import uvicorn
 
-from .config import BridgeConfig, add_grant, default_config_path, load_config, save_config
+from .config import (
+    BridgeConfig,
+    TrustMode,
+    add_grant,
+    default_config_path,
+    load_config,
+    save_config,
+)
 from .gateway import LocalGateway
 from .mcp import create_app
 
@@ -30,6 +37,8 @@ def main() -> None:
         _cmd_run(args)
     elif args.command == "doctor":
         _cmd_doctor(args)
+    elif args.command == "set-mode":
+        _cmd_set_mode(args)
     elif args.command == "enable-codex-tasks":
         _cmd_set_codex_tasks(args, enabled=True)
     elif args.command == "disable-codex-tasks":
@@ -65,6 +74,9 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--log-level", default="info", choices=["debug", "info", "warning", "error"])
 
     subparsers.add_parser("doctor", help="Check config and local dependencies")
+
+    mode = subparsers.add_parser("set-mode", help="Set restricted or full_delegate trust mode")
+    mode.add_argument("mode", choices=["restricted", "full_delegate"])
 
     subparsers.add_parser(
         "enable-codex-tasks",
@@ -117,7 +129,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
         config.host = args.host
     if args.port:
         config.port = args.port
-    gateway = LocalGateway(config)
+    gateway = LocalGateway(config, config_path=args.config)
     app = create_app(gateway)
     uvicorn.run(app, host=config.host, port=config.port, log_level=args.log_level)
 
@@ -127,6 +139,7 @@ def _cmd_doctor(args: argparse.Namespace) -> None:
     print(f"Config: {args.config}")
     print(f"Host: {config.host}")
     print(f"Port: {config.port}")
+    print(f"Trust mode: {config.trust_mode}")
     print(f"Auth token: {'configured' if config.auth_token else 'missing'}")
     print(f"Codex tasks: {'enabled' if config.enable_codex_tasks else 'disabled'}")
     print(f"Grants: {len(config.grants)}")
@@ -139,6 +152,15 @@ def _cmd_doctor(args: argparse.Namespace) -> None:
     print(f"codex: {shutil.which('codex') or 'missing'}")
     print(f"rg: {shutil.which('rg') or 'missing'}")
     print(f"cloudflared: {shutil.which('cloudflared') or 'optional, missing'}")
+
+
+def _cmd_set_mode(args: argparse.Namespace) -> None:
+    config = load_config(args.config)
+    mode: TrustMode = args.mode
+    save_config(config.model_copy(update={"trust_mode": mode}), args.config)
+    print(f"Set bridge trust mode: {mode}")
+    if mode == "full_delegate":
+        print("full_delegate allows broad local read, write, and execute access via the bridge.")
 
 
 def _cmd_set_codex_tasks(args: argparse.Namespace, *, enabled: bool) -> None:

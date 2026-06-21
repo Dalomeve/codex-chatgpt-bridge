@@ -5,8 +5,11 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 from secrets import token_urlsafe
+from typing import Literal
 
 from pydantic import BaseModel, Field
+
+TrustMode = Literal["restricted", "full_delegate"]
 
 
 class BridgeGrant(BaseModel):
@@ -32,6 +35,7 @@ class BridgeConfig(BaseModel):
     port: int = 8766
     auth_token: str = Field(default_factory=lambda: token_urlsafe(32))
     connector_secret: str = Field(default_factory=lambda: token_urlsafe(32))
+    trust_mode: TrustMode = "restricted"
     enable_codex_tasks: bool = False
     max_file_chars: int = 200_000
     max_write_chars: int = 400_000
@@ -100,6 +104,7 @@ def _to_toml(config: BridgeConfig) -> str:
         f"port = {config.port}",
         f"auth_token = {_quote(config.auth_token)}",
         f"connector_secret = {_quote(config.connector_secret)}",
+        f"trust_mode = {_quote(config.trust_mode)}",
         f"enable_codex_tasks = {str(config.enable_codex_tasks).lower()}",
         f"max_file_chars = {config.max_file_chars}",
         f"max_write_chars = {config.max_write_chars}",

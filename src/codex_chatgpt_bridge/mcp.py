@@ -64,6 +64,9 @@ async def call_tool(gateway: LocalGateway, params: JsonObject) -> JsonObject:
         raise ValueError("tools/call params.arguments must be an object")
     handlers: dict[str, Callable[..., Awaitable[JsonObject]]] = {
         "bridge_status": gateway.bridge_status,
+        "set_bridge_mode": gateway.set_bridge_mode,
+        "grant_path": gateway.grant_path,
+        "revoke_grant": gateway.revoke_grant,
         "list_grants": gateway.list_grants,
         "search_files": gateway.search_files,
         "read_file": gateway.read_file,
@@ -71,6 +74,10 @@ async def call_tool(gateway: LocalGateway, params: JsonObject) -> JsonObject:
     }
     if gateway.config.enable_codex_tasks:
         handlers["codex_task_run"] = gateway.codex_task_run
+        handlers["codex_session_start"] = gateway.codex_session_start
+        handlers["codex_session_continue"] = gateway.codex_session_continue
+        handlers["codex_session_list"] = gateway.codex_session_list
+        handlers["codex_session_status"] = gateway.codex_session_status
     handler = handlers.get(name)
     if handler is None:
         raise ValueError(f"unknown tool: {name}")
@@ -126,6 +133,60 @@ def tool_definitions(enable_codex_tasks: bool, *, auth_mode: str = "bearer") -> 
             ),
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
             "annotations": {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
+        },
+        {
+            "name": "set_bridge_mode",
+            "title": "Set bridge trust mode",
+            "description": (
+                "Switch the local bridge between restricted grants and full delegate mode. "
+                "full_delegate gives this connector broad local read, write, and execute access."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["restricted", "full_delegate"],
+                    }
+                },
+                "required": ["mode"],
+                "additionalProperties": False,
+            },
+            "annotations": {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False},
+        },
+        {
+            "name": "grant_path",
+            "title": "Grant local path",
+            "description": (
+                "Add or replace a persisted local path grant for reading, writing, and execution."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    "name": {"type": ["string", "null"], "default": None},
+                    "read": {"type": "boolean", "default": True},
+                    "write": {"type": "boolean", "default": False},
+                    "execute": {"type": "boolean", "default": False},
+                },
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+            "annotations": {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False},
+        },
+        {
+            "name": "revoke_grant",
+            "title": "Revoke local path grant",
+            "description": "Remove a persisted local path grant by path.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "minLength": 1, "maxLength": 1000},
+                },
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+            "annotations": {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False},
         },
         {
             "name": "list_grants",
@@ -190,40 +251,7 @@ def tool_definitions(enable_codex_tasks: bool, *, auth_mode: str = "bearer") -> 
         },
     ]
     if enable_codex_tasks:
-        tools.append(
-            {
-                "name": "codex_task_run",
-                "title": "Run local Codex task",
-                "description": (
-                    "Hand a bounded task to local Codex in an approved executable directory."
-                ),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "prompt": {"type": "string", "minLength": 1, "maxLength": 20000},
-                        "cwd": {"type": "string", "minLength": 1, "maxLength": 1000},
-                        "sandbox_mode": {
-                            "type": "string",
-                            "enum": ["read_only", "workspace_write"],
-                            "default": "read_only",
-                        },
-                        "wait_timeout_s": {
-                            "type": "number",
-                            "exclusiveMinimum": 0,
-                            "maximum": 600,
-                            "default": 120,
-                        },
-                    },
-                    "required": ["prompt", "cwd"],
-                    "additionalProperties": False,
-                },
-                "annotations": {
-                    "readOnlyHint": False,
-                    "destructiveHint": True,
-                    "openWorldHint": False,
-                },
-            }
-        )
+        tools.extend(_codex_tool_definitions())
     for tool in tools:
         security_schemes = (
             [{"type": "noauth"}]
@@ -238,6 +266,130 @@ def tool_definitions(enable_codex_tasks: bool, *, auth_mode: str = "bearer") -> 
             "openai/toolInvocation/invoked": f"{tool['name']} finished",
         }
     return tools
+
+
+def _codex_tool_definitions() -> list[JsonObject]:
+    codex_session_sandbox = {
+        "type": "string",
+        "enum": ["read_only", "workspace_write", "danger_full_access"],
+        "default": "danger_full_access",
+    }
+    return [
+        {
+            "name": "codex_task_run",
+            "title": "Run local Codex task",
+            "description": (
+                "Hand one bounded task to local Codex in an approved executable directory."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "minLength": 1, "maxLength": 20000},
+                    "cwd": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    "sandbox_mode": {
+                        "type": "string",
+                        "enum": ["read_only", "workspace_write"],
+                        "default": "read_only",
+                    },
+                    "wait_timeout_s": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "maximum": 600,
+                        "default": 120,
+                    },
+                },
+                "required": ["prompt", "cwd"],
+                "additionalProperties": False,
+            },
+            "annotations": {
+                "readOnlyHint": False,
+                "destructiveHint": True,
+                "openWorldHint": False,
+            },
+        },
+        {
+            "name": "codex_session_start",
+            "title": "Start local Codex session",
+            "description": (
+                "Start a persistent local Codex session. Use this as the main execution path "
+                "when ChatGPT needs local project changes, command execution, tests, or repo work."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "minLength": 1, "maxLength": 20000},
+                    "cwd": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    "sandbox_mode": codex_session_sandbox,
+                    "wait_timeout_s": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "maximum": 1200,
+                        "default": 600,
+                    },
+                },
+                "required": ["prompt", "cwd"],
+                "additionalProperties": False,
+            },
+            "annotations": {
+                "readOnlyHint": False,
+                "destructiveHint": True,
+                "openWorldHint": False,
+            },
+        },
+        {
+            "name": "codex_session_continue",
+            "title": "Continue local Codex session",
+            "description": "Send a follow-up prompt to a persisted local Codex session.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "minLength": 1, "maxLength": 20000},
+                    "bridge_session_id": {
+                        "type": "string",
+                        "default": "latest",
+                        "description": "Use latest, a bridge_session_id, or a Codex session id.",
+                    },
+                    "sandbox_mode": codex_session_sandbox,
+                    "wait_timeout_s": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "maximum": 1200,
+                        "default": 600,
+                    },
+                },
+                "required": ["prompt"],
+                "additionalProperties": False,
+            },
+            "annotations": {
+                "readOnlyHint": False,
+                "destructiveHint": True,
+                "openWorldHint": False,
+            },
+        },
+        {
+            "name": "codex_session_list",
+            "title": "List local Codex sessions",
+            "description": "List persistent local Codex sessions known to the bridge.",
+            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+            "annotations": {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
+        },
+        {
+            "name": "codex_session_status",
+            "title": "Get local Codex session status",
+            "description": "Return metadata for a persisted local Codex session.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "bridge_session_id": {
+                        "type": "string",
+                        "default": "latest",
+                    },
+                },
+                "additionalProperties": False,
+            },
+            "annotations": {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
+        },
+    ]
 
 
 def _auth_error(expected_token: str, authorization: str | None) -> JSONResponse | None:
