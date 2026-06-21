@@ -58,21 +58,28 @@ The MCP endpoint is:
 http://127.0.0.1:8766/mcp
 ```
 
-If ChatGPT cannot reach local `127.0.0.1` from the web UI, expose the local server through a tunnel you trust, then use the HTTPS `/mcp` URL in ChatGPT's connector/app setup.
+If ChatGPT cannot reach local `127.0.0.1` from the web UI, expose the local server through a tunnel you trust, then use the HTTPS URL in ChatGPT's connector/app setup.
 
-Do not expose the bridge through a public URL without bearer-token auth. The bridge requires an HTTP Bearer token generated in the local config. To print setup instructions:
+The bridge supports two connector URLs:
+
+- Bearer-protected URL: `/mcp`
+- ChatGPT no-auth secret URL: `/mcp/<connector-secret>`
+
+Use the no-auth secret URL when ChatGPT's app setup only offers OAuth / unauthenticated / mixed auth. Keep that URL private because the secret path is the connector credential.
+
+To print setup instructions:
 
 ```bash
 codex-chatgpt-bridge print-chatgpt-setup
 ```
 
-To display the local token on your own machine:
+To display local secrets on your own machine:
 
 ```bash
 codex-chatgpt-bridge print-chatgpt-setup --show-token
 ```
 
-If you use a tunnel, prefer a named/authenticated tunnel or another access-controlled tunnel you understand. Then add the generated HTTPS URL with `/mcp` appended and configure ChatGPT auth as HTTP Bearer / bearer API key.
+If you use a tunnel, prefer a named/authenticated tunnel or another access-controlled tunnel you understand. Then add either `/mcp` for bearer auth or `/mcp/<connector-secret>` for ChatGPT's unauthenticated connector mode.
 
 ## Tools
 
@@ -201,21 +208,28 @@ curl http://127.0.0.1:8766/healthz
 http://127.0.0.1:8766/mcp
 ```
 
-如果 ChatGPT 网页端不能直接访问本机 `127.0.0.1`，你需要用自己信任的 tunnel 暴露本地服务，然后在 ChatGPT 的 connector/app 设置里填写 HTTPS `/mcp` 地址。
+如果 ChatGPT 网页端不能直接访问本机 `127.0.0.1`，你需要用自己信任的 tunnel 暴露本地服务，然后在 ChatGPT 的 connector/app 设置里填写 HTTPS 地址。
 
-不要把这个桥用无认证公网 URL 裸露出去。桥默认要求本地配置生成的 HTTP Bearer token。打印设置说明：
+桥支持两类连接地址：
+
+- Bearer 保护地址：`/mcp`
+- ChatGPT 无认证 secret 地址：`/mcp/<connector-secret>`
+
+如果 ChatGPT 创建应用时只提供 OAuth / 未授权 / 混合认证，就使用无认证 secret 地址。这个 URL 本身就是连接凭证，不能公开分享。
+
+打印设置说明：
 
 ```bash
 codex-chatgpt-bridge print-chatgpt-setup
 ```
 
-在本机显示 token：
+在本机显示连接 secret：
 
 ```bash
 codex-chatgpt-bridge print-chatgpt-setup --show-token
 ```
 
-如果使用 tunnel，优先使用 named/authenticated tunnel 或其它你理解的访问控制方式。然后把生成的 HTTPS 地址后面加上 `/mcp`，并在 ChatGPT 里把认证方式设为 HTTP Bearer / bearer API key。
+如果使用 tunnel，优先使用 named/authenticated tunnel 或其它你理解的访问控制方式。然后根据 ChatGPT 支持的认证方式，使用 `/mcp` 或 `/mcp/<connector-secret>`。
 
 ## 可用工具
 

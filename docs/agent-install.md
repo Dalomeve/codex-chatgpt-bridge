@@ -36,9 +36,9 @@ When acting as the installing agent, do not stop after the package and service a
 10. If ChatGPT cannot reach localhost directly, ask before starting an authenticated HTTPS tunnel.
 11. Open ChatGPT in the user's browser if browser or computer-use tools are available. Explain that this is only to create the connector.
 12. Create an MCP connector named `Codex ChatGPT Bridge`.
-13. Use the local MCP URL, or the authenticated tunnel `/mcp` URL if a tunnel was needed.
-14. Configure auth as HTTP Bearer / bearer API key.
-15. Paste the bearer token into the connector setup UI only through a safe local secret-input or clipboard path. Do not run token-printing commands in a transcript-captured tool.
+13. Use the local MCP URL, or the authenticated tunnel URL if a tunnel was needed.
+14. If ChatGPT supports HTTP Bearer / bearer API key, use `/mcp` and paste the bearer token through a safe local secret-input or clipboard path.
+15. If ChatGPT only offers OAuth / unauthenticated / mixed auth, use `/mcp/<connector-secret>` and choose unauthenticated. Treat the full URL as a secret.
 16. After connecting, verify the connector by asking ChatGPT to call `list_grants`.
 17. If browser automation or connector creation is blocked, tell the user exactly what remains: connector name, MCP URL, auth type, and the local command to display the token.
 
@@ -51,5 +51,6 @@ When acting as the installing agent, do not stop after the package and service a
 - Do not copy secrets into the config or README.
 - Do not print tokens, private keys, cookies, `.env` contents, or cloud credentials.
 - Do not paste the bearer token into the chat transcript. Paste it only into the local ChatGPT connector auth field when operating the browser on the user's behalf.
-- If no safe secret-input or clipboard path is available, ask the user to run `codex-chatgpt-bridge print-chatgpt-setup --show-token` locally and paste the token themselves.
+- Do not paste the connector secret URL into the chat transcript. Paste it only into the local ChatGPT connector URL field when operating the browser on the user's behalf.
+- If no safe secret-input or clipboard path is available, ask the user to run `codex-chatgpt-bridge print-chatgpt-setup --show-token` locally and paste the token or secret URL themselves.
 - When using browser automation, only operate the ChatGPT connector setup flow. Do not inspect, summarize, or extract existing ChatGPT conversations, tabs, account data, or page contents unrelated to connector setup.

@@ -42,6 +42,42 @@ def test_tools_list_requires_bearer_token(tmp_path: Path) -> None:
     assert response.status_code == 401
 
 
+def test_connector_secret_url_allows_noauth_tools_list(tmp_path: Path) -> None:
+    config = BridgeConfig(
+        auth_token="test-token",
+        connector_secret="connector-secret",
+        grants=[BridgeGrant(path=tmp_path)],
+    )
+    app = create_app(LocalGateway(config))
+    client = TestClient(app)
+
+    response = client.post(
+        "/mcp/connector-secret",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+    )
+
+    assert response.status_code == 200
+    tools = response.json()["result"]["tools"]
+    assert tools[0]["securitySchemes"] == [{"type": "noauth"}]
+
+
+def test_connector_secret_url_rejects_wrong_secret(tmp_path: Path) -> None:
+    config = BridgeConfig(
+        auth_token="test-token",
+        connector_secret="connector-secret",
+        grants=[BridgeGrant(path=tmp_path)],
+    )
+    app = create_app(LocalGateway(config))
+    client = TestClient(app)
+
+    response = client.post(
+        "/mcp/wrong-secret",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+    )
+
+    assert response.status_code == 401
+
+
 def test_initialize_succeeds_with_bearer_token(tmp_path: Path) -> None:
     config = BridgeConfig(auth_token="test-token", grants=[BridgeGrant(path=tmp_path)])
     app = create_app(LocalGateway(config))

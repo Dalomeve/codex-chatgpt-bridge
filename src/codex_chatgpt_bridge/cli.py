@@ -191,25 +191,45 @@ def _cmd_install_launch_agent(args: argparse.Namespace) -> None:
 
 def _cmd_print_chatgpt_setup(args: argparse.Namespace) -> None:
     config = load_config(args.config)
+    connector_url = _connector_secret_url(args.url, config.connector_secret)
     token_line = (
         f"Bearer token: {config.auth_token}"
         if args.show_token
         else "Bearer token: stored in config; rerun with --show-token to display it locally."
+    )
+    connector_url_line = (
+        f"ChatGPT no-auth connector URL: {connector_url}"
+        if args.show_token
+        else (
+            "ChatGPT no-auth connector URL: stored in config; rerun with "
+            "--show-token to display it locally."
+        )
     )
     print(
         "\n".join(
             [
                 "ChatGPT connector setup",
                 "1. Start the bridge: codex-chatgpt-bridge run",
-                "2. If ChatGPT needs HTTPS, run a trusted authenticated tunnel to the local port.",
-                f"3. Add an MCP connector/app in ChatGPT with this MCP URL: {args.url}",
-                "4. Set auth to HTTP Bearer / API key bearer and paste the local token.",
-                f"5. {token_line}",
-                "6. In any ChatGPT conversation, mention the connector and ask it to "
+                "2. If ChatGPT needs HTTPS, run a trusted tunnel to the local port.",
+                f"3. Bearer-protected MCP URL: {args.url}",
+                f"4. {connector_url_line}",
+                "5. If ChatGPT only offers OAuth / unauthenticated / mixed auth, "
+                "use the no-auth connector URL and keep it private.",
+                "6. If ChatGPT supports HTTP Bearer / API key bearer, use the "
+                "bearer-protected URL and paste the local token.",
+                f"7. {token_line}",
+                "8. In any ChatGPT conversation, mention the connector and ask it to "
                 "list_grants first.",
             ]
         )
     )
+
+
+def _connector_secret_url(base_url: str, connector_secret: str) -> str:
+    trimmed = base_url.rstrip("/")
+    if trimmed.endswith("/mcp"):
+        return f"{trimmed}/{connector_secret}"
+    return f"{trimmed}/mcp/{connector_secret}"
 
 
 def _user_id() -> int:

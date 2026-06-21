@@ -41,26 +41,16 @@ def create_app(gateway: LocalGateway) -> FastAPI:
         auth_error = _auth_error(gateway.config.auth_token, authorization)
         if auth_error is not None:
             return auth_error
-        try:
-            if request.method == "tools/list":
-                result = {"tools": tool_definitions(gateway.config.enable_codex_tasks)}
-            elif request.method == "tools/call":
-                result = await call_tool(gateway, request.params)
-            elif request.method == "initialize":
-                result = {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "codex-chatgpt-bridge", "version": "0.1.0"},
-                }
-            elif request.method == "notifications/initialized" or request.method == "ping":
-                result = {}
-            else:
-                return _jsonrpc_error(request.id, -32601, f"unknown method: {request.method}")
-        except BridgeError as exc:
-            return _jsonrpc_error(request.id, -32000, str(exc))
-        except ValueError as exc:
-            return _jsonrpc_error(request.id, -32602, str(exc))
-        return JSONResponse({"jsonrpc": "2.0", "id": request.id, "result": result})
+        return await _handle_mcp_request(gateway, request, auth_mode="bearer")
+
+    @app.post("/mcp/{connector_secret}")
+    async def mcp_connector_secret_endpoint(
+        connector_secret: str,
+        request: JsonRpcRequest,
+    ) -> JSONResponse:
+        if connector_secret != gateway.config.connector_secret:
+            return _auth_error(gateway.config.connector_secret, None)
+        return await _handle_mcp_request(gateway, request, auth_mode="connector_secret")
 
     return app
 
@@ -91,7 +81,40 @@ async def call_tool(gateway: LocalGateway, params: JsonObject) -> JsonObject:
     }
 
 
-def tool_definitions(enable_codex_tasks: bool) -> list[JsonObject]:
+async def _handle_mcp_request(
+    gateway: LocalGateway,
+    request: JsonRpcRequest,
+    *,
+    auth_mode: str,
+) -> JSONResponse:
+    try:
+        if request.method == "tools/list":
+            result = {
+                "tools": tool_definitions(
+                    gateway.config.enable_codex_tasks,
+                    auth_mode=auth_mode,
+                )
+            }
+        elif request.method == "tools/call":
+            result = await call_tool(gateway, request.params)
+        elif request.method == "initialize":
+            result = {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "codex-chatgpt-bridge", "version": "0.1.0"},
+            }
+        elif request.method == "notifications/initialized" or request.method == "ping":
+            result = {}
+        else:
+            return _jsonrpc_error(request.id, -32601, f"unknown method: {request.method}")
+    except BridgeError as exc:
+        return _jsonrpc_error(request.id, -32000, str(exc))
+    except ValueError as exc:
+        return _jsonrpc_error(request.id, -32602, str(exc))
+    return JSONResponse({"jsonrpc": "2.0", "id": request.id, "result": result})
+
+
+def tool_definitions(enable_codex_tasks: bool, *, auth_mode: str = "bearer") -> list[JsonObject]:
     """Return tool schemas visible to ChatGPT."""
 
     tools: list[JsonObject] = [
@@ -202,7 +225,11 @@ def tool_definitions(enable_codex_tasks: bool) -> list[JsonObject]:
             }
         )
     for tool in tools:
-        security_schemes = [{"type": "http", "scheme": "bearer"}]
+        security_schemes = (
+            [{"type": "noauth"}]
+            if auth_mode == "connector_secret"
+            else [{"type": "http", "scheme": "bearer"}]
+        )
         tool["securitySchemes"] = security_schemes
         tool["_meta"] = {
             "securitySchemes": security_schemes,

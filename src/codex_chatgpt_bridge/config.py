@@ -31,6 +31,7 @@ class BridgeConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 8766
     auth_token: str = Field(default_factory=lambda: token_urlsafe(32))
+    connector_secret: str = Field(default_factory=lambda: token_urlsafe(32))
     enable_codex_tasks: bool = False
     max_file_chars: int = 200_000
     max_write_chars: int = 400_000
@@ -98,6 +99,7 @@ def _to_toml(config: BridgeConfig) -> str:
         f"host = {_quote(config.host)}",
         f"port = {config.port}",
         f"auth_token = {_quote(config.auth_token)}",
+        f"connector_secret = {_quote(config.connector_secret)}",
         f"enable_codex_tasks = {str(config.enable_codex_tasks).lower()}",
         f"max_file_chars = {config.max_file_chars}",
         f"max_write_chars = {config.max_write_chars}",
