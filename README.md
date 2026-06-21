@@ -15,20 +15,15 @@ ChatGPT web is often the better researcher, planner, and discussion surface. Cod
 - write only inside explicitly writable grants;
 - ask local Codex to run a bounded task in an explicitly executable directory.
 
-## Quick Start With Codex
+## One-Line Install With Codex
 
 Ask Codex:
 
 ```text
 Install https://github.com/dalomeve/codex-chatgpt-bridge on this computer.
-Create a secure default config.
-Grant read access to ~/Documents and read/write/execute access to ~/Projects.
-Only enable local Codex task execution if I explicitly ask for it.
-Install it as a local service if possible.
-Then print the ChatGPT MCP connector setup URL and safety summary.
 ```
 
-Codex should clone the repo, install the package, create the config, add your grants, and help you connect it to ChatGPT.
+That should be enough. Codex should read this README and `docs/agent-install.md`, install the bridge, create a secure config, avoid broad permissions by default, and then ask you which folders to grant.
 
 ## Manual Install
 
@@ -167,14 +162,9 @@ ChatGPT 网页端经常更适合做研究员、规划者和对话入口；Codex 
 
 ```text
 安装 https://github.com/dalomeve/codex-chatgpt-bridge 到这台电脑。
-创建安全默认配置。
-给 ~/Documents 只读权限，给 ~/Projects 读写和执行权限。
-只有在我明确要求时，才开启本地 Codex 任务执行。
-如果系统支持，把它安装成本地常驻服务。
-最后告诉我 ChatGPT MCP 连接地址和安全边界。
 ```
 
-Codex 应该完成 clone、安装、初始化配置、添加授权目录、启动服务，并指导你把它接到 ChatGPT。
+这一句话就应该够了。Codex 应该自己读取本 README 和 `docs/agent-install.md`，安装本地桥，创建安全配置，默认不乱开大权限，然后再问你要授权哪些文件夹。
 
 ## 手动安装
 

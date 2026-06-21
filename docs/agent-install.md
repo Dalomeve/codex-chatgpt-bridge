@@ -2,16 +2,13 @@
 
 This project is designed to be installed by Codex or another local coding agent.
 
-## Suggested Prompt
+## One-Line Prompt
 
 ```text
 Install https://github.com/dalomeve/codex-chatgpt-bridge on this computer.
-Create a secure default config.
-Grant read access to ~/Documents and read/write/execute access to ~/Projects.
-Do not enable local Codex task execution unless I explicitly ask for it.
-Install it as a local service if this OS supports it.
-Then print the ChatGPT MCP connector setup URL and safety summary.
 ```
+
+If the user only says this one sentence, treat it as enough instruction to install the bridge safely. Do not require them to paste a longer setup prompt.
 
 ## What The Agent Should Do
 
@@ -19,10 +16,12 @@ Then print the ChatGPT MCP connector setup URL and safety summary.
 2. Install it with `pipx`, `uv tool`, or an isolated virtual environment.
 3. Use Python 3.11 or newer.
 4. Run `codex-chatgpt-bridge init`.
-5. Run one or more `codex-chatgpt-bridge grant ...` commands.
-6. Start the bridge with `codex-chatgpt-bridge run`.
-7. If ChatGPT cannot reach localhost directly, start a user-approved authenticated HTTPS tunnel.
-8. Tell the user which MCP URL and HTTP Bearer token to add in ChatGPT.
+5. Install the local service if the OS supports it.
+6. Ask the user which folders to grant before adding read, write, or execute permissions.
+7. Start the bridge with `codex-chatgpt-bridge run` or the installed service.
+8. If ChatGPT cannot reach localhost directly, ask before starting an authenticated HTTPS tunnel.
+9. Tell the user which MCP URL and auth method to add in ChatGPT.
+10. Tell the user to run `codex-chatgpt-bridge print-chatgpt-setup --show-token` locally if they need to display the bearer token.
 
 ## Safety Rules For Installers
 
