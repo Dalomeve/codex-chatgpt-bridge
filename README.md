@@ -25,6 +25,11 @@ Install https://github.com/dalomeve/codex-chatgpt-bridge on this computer.
 
 That should be enough. Codex should read this README and `docs/agent-install.md`, install the bridge, create a secure config, avoid broad permissions by default, and then ask you which folders to grant.
 
+After installation, Codex should not stop at "installed." It should ask which local
+project or folders ChatGPT may access, apply those grants, then try to open
+ChatGPT in the browser and add the MCP connector for you. If browser automation
+is unavailable, it should fall back to clear manual steps.
+
 ## Manual Install
 
 ```bash
@@ -165,6 +170,8 @@ ChatGPT 网页端经常更适合做研究员、规划者和对话入口；Codex 
 ```
 
 这一句话就应该够了。Codex 应该自己读取本 README 和 `docs/agent-install.md`，安装本地桥，创建安全配置，默认不乱开大权限，然后再问你要授权哪些文件夹。
+
+安装完成后，Codex 不应该只说“装好了”就结束。它应该继续问你要把哪个本地项目或文件夹开放给 ChatGPT，按你的回答添加授权，然后尝试打开 ChatGPT 网页端，帮你创建 MCP connector。如果当前环境不能操作浏览器，再退回到清晰的手动步骤。
 
 ## 手动安装
 
