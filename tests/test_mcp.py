@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from codex_chatgpt_bridge.config import BridgeConfig, BridgeGrant
@@ -114,11 +115,161 @@ def test_codex_task_tool_requires_explicit_enable(tmp_path: Path) -> None:
     names = {tool["name"] for tool in response.json()["result"]["tools"]}
     assert "codex_task_run" in names
     assert {
+        "codex_delegate",
         "codex_session_start",
         "codex_session_continue",
         "codex_session_list",
         "codex_session_status",
     } <= names
+
+
+def test_delegate_tool_profile_exposes_single_action_tool(tmp_path: Path) -> None:
+    config = BridgeConfig(
+        auth_token="test-token",
+        enable_codex_tasks=True,
+        tool_profile="delegate",
+        trust_mode="full_delegate",
+    )
+    app = create_app(LocalGateway(config))
+    client = TestClient(app)
+
+    response = client.post(
+        "/mcp",
+        headers={"Authorization": "Bearer test-token"},
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+    )
+
+    assert response.status_code == 200
+    names = {tool["name"] for tool in response.json()["result"]["tools"]}
+    assert names == {
+        "bridge_status",
+        "codex_delegate",
+        "codex_session_list",
+        "codex_session_status",
+    }
+
+
+def test_codex_delegate_schema_uses_structured_scope(tmp_path: Path) -> None:
+    config = BridgeConfig(
+        auth_token="test-token",
+        enable_codex_tasks=True,
+        tool_profile="delegate",
+        trust_mode="full_delegate",
+    )
+    app = create_app(LocalGateway(config))
+    client = TestClient(app)
+
+    response = client.post(
+        "/mcp",
+        headers={"Authorization": "Bearer test-token"},
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+    )
+
+    assert response.status_code == 200
+    tools = response.json()["result"]["tools"]
+    delegate_tool = next(tool for tool in tools if tool["name"] == "codex_delegate")
+    schema = delegate_tool["inputSchema"]
+    assert schema["required"] == ["permission_level"]
+    assert schema["properties"]["prompt"]["deprecated"] is True
+    assert schema["properties"]["permission_level"]["enum"] == [
+        "read_only",
+        "local_file_write",
+        "repo_edit",
+        "shell_command",
+        "gui_control",
+        "full_local",
+    ]
+    assert "target_paths" in schema["properties"]
+    assert "expected_result" in schema["properties"]
+    assert schema["properties"]["sandbox_mode"]["default"] is None
+    assert "outputSchema" in delegate_tool
+    assert delegate_tool["annotations"] == {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "openWorldHint": True,
+    }
+
+
+def test_tools_call_codex_delegate_accepts_legacy_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = BridgeConfig(
+        auth_token="test-token",
+        enable_codex_tasks=True,
+        tool_profile="delegate",
+        trust_mode="full_delegate",
+    )
+    gateway = LocalGateway(config, session_store_path=tmp_path / "sessions.json")
+    commands: list[list[str]] = []
+
+    async def fake_run_codex_command(
+        command: list[str],
+        output_path: Path,
+        wait_timeout_s: float,
+        cwd: Path,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        output_path.write_text("delegated", encoding="utf-8")
+        return (
+            0,
+            '{"type":"session_configured","session_id":"019ee9e9-ecb8-72e3-a495-43674e1d7576"}\n',
+            "",
+        )
+
+    monkeypatch.setattr(gateway, "_run_codex_command", fake_run_codex_command)
+    monkeypatch.setattr(gateway, "_codex_path", lambda: "/usr/local/bin/codex")
+    app = create_app(gateway)
+    client = TestClient(app)
+
+    response = client.post(
+        "/mcp",
+        headers={"Authorization": "Bearer test-token"},
+        json={
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "codex_delegate",
+                "arguments": {
+                    "prompt": "legacy prompt",
+                    "permission_level": "local_file_write",
+                    "cwd": str(tmp_path),
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    structured = response.json()["result"]["structuredContent"]
+    assert structured["final_message"] == "delegated"
+    assert structured["sandbox_mode"] == "workspace_write"
+    assert "Task:\nlegacy prompt" in commands[0][-1]
+
+
+def test_delegate_tool_profile_blocks_hidden_low_level_tools(tmp_path: Path) -> None:
+    config = BridgeConfig(
+        auth_token="test-token",
+        enable_codex_tasks=True,
+        tool_profile="delegate",
+        trust_mode="full_delegate",
+    )
+    app = create_app(LocalGateway(config))
+    client = TestClient(app)
+
+    response = client.post(
+        "/mcp",
+        headers={"Authorization": "Bearer test-token"},
+        json={
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": "read_file", "arguments": {"path": str(tmp_path / "x.txt")}},
+        },
+    )
+
+    assert response.status_code == 200
+    assert "unknown tool" in response.json()["error"]["message"]
 
 
 def test_tools_call_read_file(tmp_path: Path) -> None:

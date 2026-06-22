@@ -14,6 +14,7 @@ import uvicorn
 
 from .config import (
     BridgeConfig,
+    ToolProfile,
     TrustMode,
     add_grant,
     default_config_path,
@@ -39,6 +40,8 @@ def main() -> None:
         _cmd_doctor(args)
     elif args.command == "set-mode":
         _cmd_set_mode(args)
+    elif args.command == "set-tool-profile":
+        _cmd_set_tool_profile(args)
     elif args.command == "enable-codex-tasks":
         _cmd_set_codex_tasks(args, enabled=True)
     elif args.command == "disable-codex-tasks":
@@ -77,6 +80,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     mode = subparsers.add_parser("set-mode", help="Set restricted or full_delegate trust mode")
     mode.add_argument("mode", choices=["restricted", "full_delegate"])
+
+    profile = subparsers.add_parser(
+        "set-tool-profile",
+        help="Set full or delegate tool profile for ChatGPT",
+    )
+    profile.add_argument("profile", choices=["full", "delegate"])
 
     subparsers.add_parser(
         "enable-codex-tasks",
@@ -140,6 +149,7 @@ def _cmd_doctor(args: argparse.Namespace) -> None:
     print(f"Host: {config.host}")
     print(f"Port: {config.port}")
     print(f"Trust mode: {config.trust_mode}")
+    print(f"Tool profile: {config.tool_profile}")
     print(f"Auth token: {'configured' if config.auth_token else 'missing'}")
     print(f"Codex tasks: {'enabled' if config.enable_codex_tasks else 'disabled'}")
     print(f"Grants: {len(config.grants)}")
@@ -163,13 +173,22 @@ def _cmd_set_mode(args: argparse.Namespace) -> None:
         print("full_delegate allows broad local read, write, and execute access via the bridge.")
 
 
+def _cmd_set_tool_profile(args: argparse.Namespace) -> None:
+    config = load_config(args.config)
+    profile: ToolProfile = args.profile
+    save_config(config.model_copy(update={"tool_profile": profile}), args.config)
+    print(f"Set ChatGPT tool profile: {profile}")
+    if profile == "delegate":
+        print("delegate exposes one primary Codex delegation tool plus read-only status tools.")
+
+
 def _cmd_set_codex_tasks(args: argparse.Namespace, *, enabled: bool) -> None:
     config = load_config(args.config)
     save_config(config.model_copy(update={"enable_codex_tasks": enabled}), args.config)
     if enabled:
-        print("Enabled codex_task_run. Only grants with execute=true may run local Codex.")
+        print("Enabled Codex delegation tools. Only executable grants may run local Codex.")
     else:
-        print("Disabled codex_task_run.")
+        print("Disabled Codex delegation tools.")
 
 
 def _cmd_install_launch_agent(args: argparse.Namespace) -> None:

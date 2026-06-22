@@ -92,10 +92,13 @@ If you use a tunnel, prefer a named/authenticated tunnel or another access-contr
 - `read_file`: read a UTF-8 text file inside a readable grant.
 - `write_file`: write text inside a writable grant.
 - `codex_task_run`: ask local Codex to work in an executable grant. This tool is hidden and disabled by default.
+- `codex_delegate`: hand one structured local computer, file, shell, repo, GUI, or project task to local Codex in a single MCP call. ChatGPT supplies `task`, `permission_level`, `target_paths`, and `expected_result`.
 - `codex_session_start`: start a persistent local Codex session for project work.
 - `codex_session_continue`: continue a recorded local Codex session.
 - `codex_session_list`: list recorded local Codex sessions.
 - `codex_session_status`: inspect one recorded local Codex session.
+
+The default tool profile is `full`, which exposes the low-level file, grant, and Codex session tools. For ChatGPT web as the planning brain and local Codex as the device agent, use the `delegate` profile. It exposes one action tool, `codex_delegate`, plus read-only status tools, so ChatGPT does not need to chain many MCP approvals for one local task.
 
 ## Permission Model
 
@@ -134,14 +137,31 @@ For a personal machine where you explicitly want ChatGPT web to act as the plann
 ```bash
 codex-chatgpt-bridge set-mode full_delegate
 codex-chatgpt-bridge enable-codex-tasks
+codex-chatgpt-bridge set-tool-profile delegate
 ```
 
 In `full_delegate` mode, the bridge no longer requires path grants and no longer blocks sensitive-looking paths. The connector can ask the bridge to read, write, and execute anywhere the local bridge process can access. Codex session tools default to `danger_full_access`, which runs local Codex without approval prompts or sandboxing.
+
+In `delegate` tool profile, ChatGPT should call `codex_delegate` for the whole task, for example "open TextEdit and type 你好". The tool schema asks ChatGPT to describe the request as:
+
+- `task`: the complete local task.
+- `permission_level`: the maximum local capability, one of `read_only`, `local_file_write`, `repo_edit`, `shell_command`, `gui_control`, or `full_local`.
+- `target_paths`: local files or folders in scope, when known.
+- `expected_result`: what should be true when local Codex is done.
+
+If `sandbox_mode` is omitted, the bridge derives it from `permission_level`: `read_only` uses a read-only Codex sandbox, `local_file_write` and `repo_edit` use workspace-write, and `shell_command`, `gui_control`, and `full_local` use full local execution. The bridge rejects any explicit `sandbox_mode` that exceeds the requested `permission_level`.
+
+ChatGPT may still ask the user to approve that one custom MCP action, because that approval happens in the ChatGPT host. The profile is designed to avoid repeated approvals for `grant_path`, `read_file`, `write_file`, and session plumbing.
+
+When using ChatGPT web, type `@` and select the bridge app from the menu so it becomes a real app chip. Plain text like `@Codex ChatGPT Bridge` is not enough. Use the normal high-capability chat mode that supports custom app tools; in the current Chinese UI this has been observed to work in `超高`, while `Pro 扩展` may answer without actually attaching the MCP tools.
+
+Known host limitation: ChatGPT web may still block destructive custom MCP calls before they reach this local bridge. If the response says `blocked_by_openai_safety_check` or "tool call was blocked by OpenAI's safety check", the bridge did not receive the request and no local Codex session was started. In that case, `bridge_status` and local direct MCP tests can still pass, but web-to-local write/execute delegation is being stopped by the ChatGPT host layer.
 
 Use this only when the connector URL is private and you intentionally trust the ChatGPT session that will call it. To return to the safer default:
 
 ```bash
 codex-chatgpt-bridge set-mode restricted
+codex-chatgpt-bridge set-tool-profile full
 codex-chatgpt-bridge disable-codex-tasks
 ```
 
@@ -268,10 +288,13 @@ codex-chatgpt-bridge print-chatgpt-setup --show-token
 - `read_file`：读取可读授权目录内的 UTF-8 文本文件。
 - `write_file`：写入可写授权目录内的文本文件。
 - `codex_task_run`：让本地 Codex 在可执行授权目录中完成一个任务。这个工具默认隐藏且禁用。
+- `codex_delegate`：把一个结构化的本地电脑、文件、shell、repo、GUI 或项目任务用一次 MCP 调用交给本地 Codex。ChatGPT 会提供 `task`、`permission_level`、`target_paths` 和 `expected_result`。
 - `codex_session_start`：启动一个可持续的本地 Codex session。
 - `codex_session_continue`：继续一个已记录的本地 Codex session。
 - `codex_session_list`：列出桥记录的本地 Codex session。
 - `codex_session_status`：查看某个本地 Codex session 的状态。
+
+默认 tool profile 是 `full`，会暴露低层文件、授权和 Codex session 工具。如果你想让 ChatGPT 网页端做总控大脑、本地 Codex 做设备 agent，使用 `delegate` profile。它只暴露一个动作工具 `codex_delegate` 和只读状态工具，避免 ChatGPT 为一个本地任务连续触发很多次 MCP 授权确认。
 
 ## 权限模型
 
@@ -310,14 +333,31 @@ codex-chatgpt-bridge disable-codex-tasks
 ```bash
 codex-chatgpt-bridge set-mode full_delegate
 codex-chatgpt-bridge enable-codex-tasks
+codex-chatgpt-bridge set-tool-profile delegate
 ```
 
 在 `full_delegate` 下，桥不再要求路径 grant，也不再拦截看起来像密钥的路径。connector 可以要求桥读取、写入、执行本地 bridge 进程能访问的任何路径。Codex session 工具默认使用 `danger_full_access`，也就是让本地 Codex 不经审批、无沙盒执行。
+
+在 `delegate` tool profile 下，ChatGPT 应该用 `codex_delegate` 一次性提交完整任务，比如“打开 TextEdit 并输入你好”。这个工具会让 ChatGPT 把请求拆成清楚的结构：
+
+- `task`：完整的本地任务。
+- `permission_level`：本次任务允许使用的最高本地能力，取值为 `read_only`、`local_file_write`、`repo_edit`、`shell_command`、`gui_control` 或 `full_local`。
+- `target_paths`：已知会涉及的本地文件或文件夹。
+- `expected_result`：本地 Codex 完成后应该达到的状态。
+
+如果没有显式传 `sandbox_mode`，bridge 会根据 `permission_level` 推导：`read_only` 使用只读 Codex sandbox，`local_file_write` 和 `repo_edit` 使用 workspace-write，`shell_command`、`gui_control` 和 `full_local` 使用完整本地执行。任何超过 `permission_level` 的显式 `sandbox_mode` 都会被 bridge 拒绝。
+
+ChatGPT 仍可能要求用户批准这一次 custom MCP 动作，因为这个批准发生在 ChatGPT 宿主层。这个 profile 的目的，是避免为了同一个任务反复批准 `grant_path`、`read_file`、`write_file` 和 session 编排工具。
+
+在 ChatGPT 网页端使用时，要输入 `@` 并从菜单里选中这个 bridge app，让它变成真正的 app chip。只打一段普通文本 `@Codex ChatGPT Bridge` 不会挂上工具。模式上请选择支持自定义 app 工具的高能力聊天模式；当前中文界面实测 `超高` 可用，而 `Pro 扩展` 可能会在没有实际挂载 MCP 工具的情况下直接回答。
+
+已知宿主限制：ChatGPT 网页端仍可能在请求到达本地 bridge 之前拦截破坏性 custom MCP 调用。如果回复里出现 `blocked_by_openai_safety_check` 或“tool call was blocked by OpenAI's safety check”，说明本地 bridge 没有收到请求，也没有启动本地 Codex session。这种情况下，`bridge_status` 和本地直连 MCP 测试仍然可以通过，但网页端到本地的写入/执行委托被 ChatGPT 宿主层拦下了。
 
 只有在 connector URL 保密，并且你信任会调用它的 ChatGPT session 时才使用这个模式。恢复安全默认值：
 
 ```bash
 codex-chatgpt-bridge set-mode restricted
+codex-chatgpt-bridge set-tool-profile full
 codex-chatgpt-bridge disable-codex-tasks
 ```
 

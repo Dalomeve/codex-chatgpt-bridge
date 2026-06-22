@@ -318,6 +318,202 @@ async def test_codex_session_continue_rechecks_current_permissions(
         await gateway.codex_session_continue(prompt="continue", bridge_session_id="latest")
 
 
+@pytest.mark.asyncio
+async def test_codex_delegate_starts_one_local_codex_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = LocalGateway(
+        BridgeConfig(trust_mode="full_delegate", enable_codex_tasks=True),
+        session_store_path=tmp_path / "sessions.json",
+    )
+    commands: list[list[str]] = []
+
+    async def fake_run_codex_command(
+        command: list[str],
+        output_path: Path,
+        wait_timeout_s: float,
+        cwd: Path,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        output_path.write_text("delegated", encoding="utf-8")
+        return (
+            0,
+            '{"type":"session_configured","session_id":"019ee9e9-ecb8-72e3-a495-43674e1d7576"}\n',
+            "",
+        )
+
+    monkeypatch.setattr(gateway, "_run_codex_command", fake_run_codex_command)
+    monkeypatch.setattr(gateway, "_codex_path", lambda: "/usr/local/bin/codex")
+
+    result = await gateway.codex_delegate(
+        task="open TextEdit and type hello",
+        permission_level="gui_control",
+        target_paths=[],
+        expected_result="TextEdit contains hello.",
+        cwd=str(tmp_path),
+    )
+
+    assert result["final_message"] == "delegated"
+    assert result["delegation_mode"] == "start"
+    assert result["permission_level"] == "gui_control"
+    assert result["target_paths"] == []
+    assert result["sandbox_mode"] == "danger_full_access"
+    assert commands[0][1] == "exec"
+    assert "--skip-git-repo-check" in commands[0]
+    assert "--dangerously-bypass-approvals-and-sandbox" in commands[0]
+    delegated_prompt = commands[0][-1]
+    assert "Permission level: gui_control" in delegated_prompt
+    assert "Task:\nopen TextEdit and type hello" in delegated_prompt
+    assert "Expected result:\nTextEdit contains hello." in delegated_prompt
+
+
+@pytest.mark.asyncio
+async def test_codex_delegate_accepts_legacy_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = LocalGateway(
+        BridgeConfig(trust_mode="full_delegate", enable_codex_tasks=True),
+        session_store_path=tmp_path / "sessions.json",
+    )
+    commands: list[list[str]] = []
+
+    async def fake_run_codex_command(
+        command: list[str],
+        output_path: Path,
+        wait_timeout_s: float,
+        cwd: Path,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        output_path.write_text("delegated", encoding="utf-8")
+        return (
+            0,
+            '{"type":"session_configured","session_id":"019ee9e9-ecb8-72e3-a495-43674e1d7576"}\n',
+            "",
+        )
+
+    monkeypatch.setattr(gateway, "_run_codex_command", fake_run_codex_command)
+    monkeypatch.setattr(gateway, "_codex_path", lambda: "/usr/local/bin/codex")
+
+    result = await gateway.codex_delegate(prompt="legacy prompt", cwd=str(tmp_path))
+
+    assert result["final_message"] == "delegated"
+    assert result["permission_level"] == "full_local"
+    assert result["sandbox_mode"] == "danger_full_access"
+    assert "Task:\nlegacy prompt" in commands[0][-1]
+
+
+@pytest.mark.asyncio
+async def test_codex_delegate_defaults_sandbox_from_permission_level(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = LocalGateway(
+        BridgeConfig(trust_mode="full_delegate", enable_codex_tasks=True),
+        session_store_path=tmp_path / "sessions.json",
+    )
+    commands: list[list[str]] = []
+
+    async def fake_run_codex_command(
+        command: list[str],
+        output_path: Path,
+        wait_timeout_s: float,
+        cwd: Path,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        output_path.write_text("delegated", encoding="utf-8")
+        return (
+            0,
+            '{"type":"session_configured","session_id":"019ee9e9-ecb8-72e3-a495-43674e1d7576"}\n',
+            "",
+        )
+
+    monkeypatch.setattr(gateway, "_run_codex_command", fake_run_codex_command)
+    monkeypatch.setattr(gateway, "_codex_path", lambda: "/usr/local/bin/codex")
+
+    read_result = await gateway.codex_delegate(
+        task="inspect files",
+        permission_level="read_only",
+        cwd=str(tmp_path),
+    )
+    write_result = await gateway.codex_delegate(
+        task="write local file",
+        permission_level="local_file_write",
+        cwd=str(tmp_path),
+    )
+
+    assert read_result["sandbox_mode"] == "read_only"
+    assert write_result["sandbox_mode"] == "workspace_write"
+    assert commands[0][-3:-1] == ["--sandbox", "read-only"]
+    assert commands[1][-3:-1] == ["--sandbox", "workspace-write"]
+
+
+@pytest.mark.asyncio
+async def test_codex_delegate_rejects_sandbox_above_permission_level(tmp_path: Path) -> None:
+    gateway = LocalGateway(
+        BridgeConfig(trust_mode="full_delegate", enable_codex_tasks=True),
+        session_store_path=tmp_path / "sessions.json",
+    )
+
+    with pytest.raises(BridgeError, match="exceeds permission_level"):
+        await gateway.codex_delegate(
+            task="inspect files",
+            permission_level="read_only",
+            sandbox_mode="danger_full_access",
+            cwd=str(tmp_path),
+        )
+
+
+@pytest.mark.asyncio
+async def test_codex_delegate_rejects_empty_structured_task(tmp_path: Path) -> None:
+    gateway = LocalGateway(
+        BridgeConfig(trust_mode="full_delegate", enable_codex_tasks=True),
+        session_store_path=tmp_path / "sessions.json",
+    )
+
+    with pytest.raises(BridgeError, match="task must not be empty"):
+        await gateway.codex_delegate(task="   ", cwd=str(tmp_path))
+
+
+@pytest.mark.asyncio
+async def test_codex_delegate_continues_existing_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = LocalGateway(
+        BridgeConfig(trust_mode="full_delegate", enable_codex_tasks=True),
+        session_store_path=tmp_path / "sessions.json",
+    )
+    commands: list[list[str]] = []
+
+    async def fake_run_codex_command(
+        command: list[str],
+        output_path: Path,
+        wait_timeout_s: float,
+        cwd: Path,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        output_path.write_text(f"delegated {len(commands)}", encoding="utf-8")
+        return (
+            0,
+            '{"type":"session_configured","session_id":"019ee9e9-ecb8-72e3-a495-43674e1d7576"}\n',
+            "",
+        )
+
+    monkeypatch.setattr(gateway, "_run_codex_command", fake_run_codex_command)
+    monkeypatch.setattr(gateway, "_codex_path", lambda: "/usr/local/bin/codex")
+    await gateway.codex_delegate(task="start", cwd=str(tmp_path))
+
+    result = await gateway.codex_delegate(task="continue", bridge_session_id="latest")
+
+    assert result["final_message"] == "delegated 2"
+    assert result["delegation_mode"] == "continue"
+    assert result["permission_level"] == "full_local"
+    assert commands[1][1:3] == ["exec", "resume"]
+    assert "--skip-git-repo-check" in commands[1]
+
+
 def test_codex_exec_permission_args_match_exec_cli(tmp_path: Path) -> None:
     gateway = LocalGateway(
         BridgeConfig(trust_mode="full_delegate", enable_codex_tasks=True),

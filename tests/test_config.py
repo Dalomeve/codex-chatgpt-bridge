@@ -58,9 +58,10 @@ def test_add_grant_replaces_same_resolved_path(tmp_path: Path) -> None:
 
 def test_full_delegate_trust_mode_roundtrip(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
-    config = BridgeConfig(trust_mode="full_delegate")
+    config = BridgeConfig(trust_mode="full_delegate", tool_profile="delegate")
 
     save_config(config, config_path)
     loaded = load_config(config_path)
 
     assert loaded.trust_mode == "full_delegate"
+    assert loaded.tool_profile == "delegate"

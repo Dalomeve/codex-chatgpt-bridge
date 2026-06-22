@@ -34,6 +34,32 @@ def test_cli_set_mode_updates_config(
     assert "full_delegate" in captured.out
 
 
+def test_cli_set_tool_profile_updates_config(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codex-chatgpt-bridge",
+            "--config",
+            str(config_path),
+            "set-tool-profile",
+            "delegate",
+        ],
+    )
+
+    main()
+
+    loaded = load_config(config_path)
+    captured = capsys.readouterr()
+    assert loaded.tool_profile == "delegate"
+    assert "delegate" in captured.out
+
+
 def test_cli_run_passes_config_path_to_gateway(
     tmp_path: Path,
     monkeypatch,

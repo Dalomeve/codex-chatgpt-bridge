@@ -28,7 +28,36 @@ from .security import is_relative_to, is_sensitive_path, resolve_user_path
 
 SandboxMode = Literal["read_only", "workspace_write"]
 CodexSessionSandboxMode = Literal["read_only", "workspace_write", "danger_full_access"]
+DelegatePermissionLevel = Literal[
+    "read_only",
+    "local_file_write",
+    "repo_edit",
+    "shell_command",
+    "gui_control",
+    "full_local",
+]
 JsonObject = dict[str, Any]
+DELEGATE_PERMISSION_LEVELS: set[str] = {
+    "read_only",
+    "local_file_write",
+    "repo_edit",
+    "shell_command",
+    "gui_control",
+    "full_local",
+}
+DELEGATE_DEFAULT_SANDBOX: dict[str, CodexSessionSandboxMode] = {
+    "read_only": "read_only",
+    "local_file_write": "workspace_write",
+    "repo_edit": "workspace_write",
+    "shell_command": "danger_full_access",
+    "gui_control": "danger_full_access",
+    "full_local": "danger_full_access",
+}
+SANDBOX_RANK: dict[str, int] = {
+    "read_only": 0,
+    "workspace_write": 1,
+    "danger_full_access": 2,
+}
 
 
 class BridgeError(RuntimeError):
@@ -65,31 +94,49 @@ class LocalGateway:
             "host": self._config.host,
             "port": self._config.port,
             "trust_mode": self._config.trust_mode,
+            "tool_profile": self._config.tool_profile,
             "grant_count": len(self._config.grants),
             "auth_required": True,
             "codex_tasks_enabled": self._config.enable_codex_tasks,
-            "tools": [
+            "tools": self._visible_tool_names(),
+        }
+
+    def _visible_tool_names(self) -> list[str]:
+        if self._config.tool_profile == "delegate":
+            return [
                 "bridge_status",
-                "set_bridge_mode",
-                "grant_path",
-                "revoke_grant",
-                "list_grants",
-                "search_files",
-                "read_file",
-                "write_file",
-                *(["codex_task_run"] if self._config.enable_codex_tasks else []),
                 *(
                     [
-                        "codex_session_start",
-                        "codex_session_continue",
+                        "codex_delegate",
                         "codex_session_list",
                         "codex_session_status",
                     ]
                     if self._config.enable_codex_tasks
                     else []
                 ),
-            ],
-        }
+            ]
+        return [
+            "bridge_status",
+            "set_bridge_mode",
+            "grant_path",
+            "revoke_grant",
+            "list_grants",
+            "search_files",
+            "read_file",
+            "write_file",
+            *(["codex_task_run"] if self._config.enable_codex_tasks else []),
+            *(
+                [
+                    "codex_delegate",
+                    "codex_session_start",
+                    "codex_session_continue",
+                    "codex_session_list",
+                    "codex_session_status",
+                ]
+                if self._config.enable_codex_tasks
+                else []
+            ),
+        ]
 
     async def list_grants(self) -> JsonObject:
         """List configured grants."""
@@ -255,6 +302,7 @@ class LocalGateway:
             "exec",
             "--cd",
             str(resolved_cwd),
+            "--skip-git-repo-check",
             "--json",
             "--output-last-message",
             str(output_path),
@@ -269,6 +317,124 @@ class LocalGateway:
             cwd=resolved_cwd,
             existing_record=None,
             sandbox_mode=sandbox_mode,
+        )
+
+    async def codex_delegate(
+        self,
+        *,
+        task: str | None = None,
+        prompt: str | None = None,
+        permission_level: DelegatePermissionLevel = "full_local",
+        target_paths: list[str] | None = None,
+        expected_result: str | None = None,
+        cwd: str | None = None,
+        bridge_session_id: str | None = None,
+        sandbox_mode: CodexSessionSandboxMode | None = None,
+        wait_timeout_s: float = 600.0,
+    ) -> JsonObject:
+        """Delegate one whole local task to Codex through a single MCP call."""
+
+        task_text = self._delegate_task_text(task=task, prompt=prompt)
+        if permission_level not in DELEGATE_PERMISSION_LEVELS:
+            raise BridgeError("permission_level must be a supported delegate permission level")
+        resolved_sandbox_mode = self._resolve_delegate_sandbox_mode(
+            permission_level=permission_level,
+            sandbox_mode=sandbox_mode,
+        )
+        normalized_paths = self._normalize_delegate_target_paths(target_paths)
+        effective_prompt = self._build_delegate_prompt(
+            task=task_text,
+            permission_level=permission_level,
+            target_paths=normalized_paths,
+            expected_result=expected_result,
+        )
+        if bridge_session_id:
+            result = await self.codex_session_continue(
+                prompt=effective_prompt,
+                bridge_session_id=bridge_session_id,
+                sandbox_mode=resolved_sandbox_mode,
+                wait_timeout_s=wait_timeout_s,
+            )
+            result["delegation_mode"] = "continue"
+        else:
+            result = await self.codex_session_start(
+                prompt=effective_prompt,
+                cwd=cwd or str(Path.home()),
+                sandbox_mode=resolved_sandbox_mode,
+                wait_timeout_s=wait_timeout_s,
+            )
+            result["delegation_mode"] = "start"
+        result["permission_level"] = permission_level
+        result["target_paths"] = normalized_paths
+        return result
+
+    def _delegate_task_text(self, *, task: str | None, prompt: str | None) -> str:
+        raw_task = task if task is not None else prompt
+        if raw_task is None or not raw_task.strip():
+            raise BridgeError("task must not be empty")
+        return raw_task.strip()
+
+    def _normalize_delegate_target_paths(self, target_paths: list[str] | None) -> list[str]:
+        if target_paths is None:
+            return []
+        normalized: list[str] = []
+        for raw_path in target_paths:
+            if not raw_path.strip():
+                raise BridgeError("target_paths must not contain empty paths")
+            normalized.append(str(resolve_user_path(raw_path)))
+        return normalized
+
+    def _resolve_delegate_sandbox_mode(
+        self,
+        *,
+        permission_level: DelegatePermissionLevel,
+        sandbox_mode: CodexSessionSandboxMode | None,
+    ) -> CodexSessionSandboxMode:
+        default_sandbox = DELEGATE_DEFAULT_SANDBOX[permission_level]
+        if sandbox_mode is None:
+            return default_sandbox
+        if sandbox_mode not in SANDBOX_RANK:
+            raise BridgeError(
+                "sandbox_mode must be read_only, workspace_write, or danger_full_access"
+            )
+        if SANDBOX_RANK[sandbox_mode] > SANDBOX_RANK[default_sandbox]:
+            raise BridgeError(
+                f"sandbox_mode={sandbox_mode} exceeds permission_level={permission_level}"
+            )
+        return sandbox_mode
+
+    def _build_delegate_prompt(
+        self,
+        *,
+        task: str,
+        permission_level: DelegatePermissionLevel,
+        target_paths: list[str],
+        expected_result: str | None,
+    ) -> str:
+        path_block = (
+            "\n".join(f"- {path}" for path in target_paths)
+            if target_paths
+            else "Not specified by ChatGPT."
+        )
+        result_block = (
+            expected_result.strip()
+            if expected_result and expected_result.strip()
+            else ("Complete the delegated task and report the outcome.")
+        )
+        return "\n\n".join(
+            [
+                "You are local Codex executing a task delegated from ChatGPT web.",
+                "Act as the local device agent for this machine.",
+                f"Permission level: {permission_level}",
+                f"Target paths:\n{path_block}",
+                f"Expected result:\n{result_block}",
+                f"Task:\n{task}",
+                (
+                    "When finished, summarize the actual local actions taken, changed files "
+                    "or apps touched, commands or checks run, and any exact blocker if the task "
+                    "could not be completed."
+                ),
+            ]
         )
 
     async def codex_session_continue(
@@ -299,6 +465,7 @@ class LocalGateway:
             self._codex_path(),
             "exec",
             "resume",
+            "--skip-git-repo-check",
             "--json",
             "--output-last-message",
             str(output_path),
