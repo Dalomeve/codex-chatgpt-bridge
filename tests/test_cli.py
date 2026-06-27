@@ -92,3 +92,173 @@ def test_cli_run_passes_config_path_to_gateway(
     main()
 
     assert captured["config_path"] == config_path
+
+
+def test_print_chatgpt_setup_prioritizes_stable_tunnels(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    save_config(BridgeConfig(), config_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codex-chatgpt-bridge",
+            "--config",
+            str(config_path),
+            "print-chatgpt-setup",
+        ],
+    )
+
+    main()
+
+    captured = capsys.readouterr()
+    assert "OpenAI Secure MCP Tunnel" in captured.out
+    assert "named Cloudflare Tunnel" in captured.out
+    assert "trycloudflare.com quick tunnel" in captured.out
+    assert "not a stable install target" in captured.out
+
+
+def test_tunnel_doctor_redacts_secret_urls_and_reports_unstable_tunnel(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    log_path = tmp_path / "cloudflared.err.log"
+    log_path.write_text(
+        "ERR Unable to establish connection with Cloudflare edge "
+        'error="DialContext error: dial tcp 203.0.113.10:7844: i/o timeout"\n'
+        "ERR Connection failed\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codex-chatgpt-bridge",
+            "tunnel-doctor",
+            "--url",
+            "https://old-random-name.trycloudflare.com/mcp/super-secret-path",
+            "--log",
+            str(log_path),
+        ],
+    )
+
+    main()
+
+    captured = capsys.readouterr()
+    assert "https://old-random-name.trycloudflare.com/mcp/[redacted]" in captured.out
+    assert "trycloudflare.com quick tunnel: unstable" in captured.out
+    assert "connection failures: found" in captured.out
+    assert "7844 timeout: found" in captured.out
+    assert "super-secret-path" not in captured.out
+
+
+def test_tunnel_doctor_redacts_userinfo_query_fragment_and_opaque_path(
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codex-chatgpt-bridge",
+            "tunnel-doctor",
+            "--url",
+            "https://user:pass@bridge.example.com/tunnel-secret?token=query-secret#frag",
+        ],
+    )
+
+    main()
+
+    captured = capsys.readouterr()
+    assert "https://bridge.example.com/[redacted]" in captured.out
+    assert "user:pass" not in captured.out
+    assert "tunnel-secret" not in captured.out
+    assert "query-secret" not in captured.out
+    assert "frag" not in captured.out
+
+
+def test_tunnel_doctor_detects_quick_tunnel_without_scheme(
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codex-chatgpt-bridge",
+            "tunnel-doctor",
+            "--url",
+            "old-random-name.trycloudflare.com/mcp/super-secret-path",
+        ],
+    )
+
+    main()
+
+    captured = capsys.readouterr()
+    assert "old-random-name.trycloudflare.com/mcp/[redacted]" in captured.out
+    assert "HTTPS: missing" in captured.out
+    assert "trycloudflare.com quick tunnel: unstable" in captured.out
+    assert "super-secret-path" not in captured.out
+
+
+def test_print_chatgpt_setup_redacts_supplied_url_without_show_token(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    save_config(BridgeConfig(), config_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codex-chatgpt-bridge",
+            "--config",
+            str(config_path),
+            "print-chatgpt-setup",
+            "--url",
+            "https://user:pass@bridge.example.com/mcp?token=query-secret#frag",
+        ],
+    )
+
+    main()
+
+    captured = capsys.readouterr()
+    assert "Bearer-protected MCP URL: https://bridge.example.com/mcp" in captured.out
+    assert "user:pass" not in captured.out
+    assert "query-secret" not in captured.out
+    assert "frag" not in captured.out
+
+
+def test_tunnel_doctor_reports_missing_and_unreadable_logs(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    missing_log = tmp_path / "missing.log"
+    unreadable_log = tmp_path / "log-directory"
+    unreadable_log.mkdir()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codex-chatgpt-bridge",
+            "tunnel-doctor",
+            "--url",
+            "https://bridge.example.com/mcp",
+            "--log",
+            str(missing_log),
+            "--log",
+            str(unreadable_log),
+        ],
+    )
+
+    main()
+
+    captured = capsys.readouterr()
+    assert f"log missing: {missing_log}" in captured.out
+    assert f"log not readable: {unreadable_log}" in captured.out

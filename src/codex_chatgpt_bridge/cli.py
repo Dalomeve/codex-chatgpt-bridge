@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 import uvicorn
 
@@ -50,6 +51,8 @@ def main() -> None:
         _cmd_install_launch_agent(args)
     elif args.command == "print-chatgpt-setup":
         _cmd_print_chatgpt_setup(args)
+    elif args.command == "tunnel-doctor":
+        _cmd_tunnel_doctor(args)
     else:
         parser.print_help()
 
@@ -107,6 +110,23 @@ def _build_parser() -> argparse.ArgumentParser:
         "--show-token",
         action="store_true",
         help="Print the local bearer token needed by ChatGPT connector setup",
+    )
+
+    tunnel_doctor = subparsers.add_parser(
+        "tunnel-doctor",
+        help="Diagnose ChatGPT remote MCP tunnel setup without printing connector secrets",
+    )
+    tunnel_doctor.add_argument(
+        "--url",
+        default=None,
+        help="ChatGPT connector URL or tunnel base URL to inspect; secret path is redacted.",
+    )
+    tunnel_doctor.add_argument(
+        "--log",
+        action="append",
+        type=Path,
+        default=[],
+        help="Tunnel log file to scan for connection failures; can be passed more than once.",
     )
     return parser
 
@@ -233,6 +253,7 @@ def _cmd_install_launch_agent(args: argparse.Namespace) -> None:
 def _cmd_print_chatgpt_setup(args: argparse.Namespace) -> None:
     config = load_config(args.config)
     connector_url = _connector_secret_url(args.url, config.connector_secret)
+    safe_bearer_url = _redact_connector_url(args.url)
     token_line = (
         f"Bearer token: {config.auth_token}"
         if args.show_token
@@ -251,19 +272,65 @@ def _cmd_print_chatgpt_setup(args: argparse.Namespace) -> None:
             [
                 "ChatGPT connector setup",
                 "1. Start the bridge: codex-chatgpt-bridge run",
-                "2. If ChatGPT needs HTTPS, run a trusted tunnel to the local port.",
-                f"3. Bearer-protected MCP URL: {args.url}",
-                f"4. {connector_url_line}",
-                "5. If ChatGPT only offers OAuth / unauthenticated / mixed auth, "
+                "2. ChatGPT web needs a stable HTTPS tunnel for local MCP. Prefer "
+                "OpenAI Secure MCP Tunnel.",
+                "3. If Secure MCP Tunnel is not available, use a named Cloudflare Tunnel "
+                "or another stable HTTPS endpoint you control.",
+                "4. Do not treat a trycloudflare.com quick tunnel as a stable install target; "
+                "it is not a stable install target and is useful only for short smoke tests.",
+                f"5. Bearer-protected MCP URL: {safe_bearer_url}",
+                f"6. {connector_url_line}",
+                "7. If ChatGPT only offers OAuth / unauthenticated / mixed auth, "
                 "use the no-auth connector URL and keep it private.",
-                "6. If ChatGPT supports HTTP Bearer / API key bearer, use the "
+                "8. If ChatGPT supports HTTP Bearer / API key bearer, use the "
                 "bearer-protected URL and paste the local token.",
-                f"7. {token_line}",
-                "8. In any ChatGPT conversation, mention the connector and ask it to "
+                f"9. {token_line}",
+                "10. In any ChatGPT conversation, mention the connector and ask it to "
                 "list_grants first.",
             ]
         )
     )
+
+
+def _cmd_tunnel_doctor(args: argparse.Namespace) -> None:
+    url = str(args.url or "").strip()
+    print("Tunnel doctor")
+    print("Recommended: OpenAI Secure MCP Tunnel")
+    print("Fallback: named Cloudflare Tunnel or another stable HTTPS endpoint")
+    print(f"tunnel-client: {shutil.which('tunnel-client') or 'missing'}")
+    print(f"cloudflared: {shutil.which('cloudflared') or 'missing'}")
+    if not url:
+        print("URL: missing")
+    else:
+        print(f"URL: {_redact_connector_url(url)}")
+        parsed = _split_diagnostic_url(url)
+        print(f"HTTPS: {'ok' if parsed.scheme == 'https' else 'missing'}")
+        host = parsed.hostname or ""
+        if host.endswith(".trycloudflare.com"):
+            print("trycloudflare.com quick tunnel: unstable")
+        else:
+            print("trycloudflare.com quick tunnel: not detected")
+        if host in {"127.0.0.1", "localhost"}:
+            print("remote reachability: localhost is not reachable from ChatGPT web")
+    log_text, log_issues = _read_logs(args.log)
+    for issue in log_issues:
+        print(issue)
+    if log_text:
+        connection_failed = _contains_any(
+            log_text,
+            [
+                "Connection failed",
+                "Unable to establish connection",
+                "Serve tunnel error",
+                "Connection terminated",
+            ],
+        )
+        timeout_7844 = "7844" in log_text and "timeout" in log_text.lower()
+        print(f"connection failures: {'found' if connection_failed else 'not found'}")
+        print(f"7844 timeout: {'found' if timeout_7844 else 'not found'}")
+    else:
+        print("connection failures: no logs provided")
+        print("7844 timeout: no logs provided")
 
 
 def _connector_secret_url(base_url: str, connector_secret: str) -> str:
@@ -271,6 +338,74 @@ def _connector_secret_url(base_url: str, connector_secret: str) -> str:
     if trimmed.endswith("/mcp"):
         return f"{trimmed}/{connector_secret}"
     return f"{trimmed}/mcp/{connector_secret}"
+
+
+def _redact_connector_url(url: str) -> str:
+    parsed = _split_diagnostic_url(url)
+    netloc = _safe_netloc(parsed)
+    path = _redacted_url_path(parsed.path)
+    if netloc:
+        prefix = f"{parsed.scheme}://{netloc}" if parsed.scheme else netloc
+        return f"{prefix}{path}"
+    return urlunsplit((parsed.scheme, "", path, "", ""))
+
+
+def _split_diagnostic_url(url: str) -> SplitResult:
+    raw_url = url.strip()
+    if "://" in raw_url:
+        return urlsplit(raw_url)
+    first_part = raw_url.split("/", 1)[0]
+    if first_part in {"localhost", "127.0.0.1"} or "." in first_part or ":" in first_part:
+        return urlsplit(f"//{raw_url}")
+    return urlsplit(raw_url)
+
+
+def _safe_netloc(parsed: SplitResult) -> str:
+    host = parsed.hostname or ""
+    if not host:
+        return ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    return f"{host}:{port}" if port is not None else host
+
+
+def _redacted_url_path(path: str) -> str:
+    path_parts = [part for part in path.split("/") if part]
+    if "mcp" in path_parts:
+        mcp_index = path_parts.index("mcp")
+        redacted_parts = path_parts[: mcp_index + 1]
+        if len(path_parts) > mcp_index + 1:
+            redacted_parts.append("[redacted]")
+        redacted_path = "/" + "/".join(redacted_parts)
+        return redacted_path
+    if path and path != "/":
+        return "/[redacted]"
+    return path
+
+
+def _read_logs(paths: list[Path]) -> tuple[str, list[str]]:
+    chunks: list[str] = []
+    issues: list[str] = []
+    for path in paths:
+        if not path.exists():
+            issues.append(f"log missing: {path}")
+            continue
+        if not path.is_file():
+            issues.append(f"log not readable: {path}")
+            continue
+        try:
+            chunks.append(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            issues.append(f"log not readable: {path}")
+    return "\n".join(chunks), issues
+
+
+def _contains_any(haystack: str, needles: list[str]) -> bool:
+    return any(needle in haystack for needle in needles)
 
 
 def _user_id() -> int:

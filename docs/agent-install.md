@@ -22,12 +22,13 @@ When acting as the installing agent, do not stop after the package and service a
 4. The user has been asked which local project or folders ChatGPT may access.
 5. The requested grants have been added.
 6. The ChatGPT web connector has been created or a clear browser-access blocker has been reported.
-7. The connector has been verified by calling `list_grants`, or the user has been given the exact remaining manual step if automation is unavailable.
+7. If ChatGPT web cannot reach localhost directly, a stable HTTPS tunnel has been configured.
+8. The connector has been verified by calling `list_grants` or `bridge_status`, or the user has been given the exact remaining manual step if automation is unavailable.
 
 ## What The Agent Should Do
 
-1. Clone the repository.
-2. Install it with `pipx`, `uv tool`, or an isolated virtual environment.
+1. Prefer direct install with `uv tool install git+https://github.com/dalomeve/codex-chatgpt-bridge.git` or `pipx install git+https://github.com/dalomeve/codex-chatgpt-bridge.git`.
+2. Clone the repository only when the user wants local development, source edits, or the direct tool install fails.
 3. Use Python 3.11 or newer.
 4. Run `codex-chatgpt-bridge init`.
 5. Install the local service if the OS supports it.
@@ -35,18 +36,41 @@ When acting as the installing agent, do not stop after the package and service a
 7. For each folder, ask whether it should be read-only, read/write, or read/write/execute.
 8. Add only the grants the user explicitly chose.
 9. Start the bridge with `codex-chatgpt-bridge run` or the installed service.
-10. If ChatGPT cannot reach localhost directly, ask before starting an authenticated HTTPS tunnel.
+10. If ChatGPT cannot reach localhost directly, use a stable HTTPS tunnel. Prefer OpenAI
+    Secure MCP Tunnel. If the user cannot provide a tunnel id and runtime key, use a named
+    Cloudflare Tunnel or another stable endpoint the user controls.
 11. Open ChatGPT in the user's browser if browser or computer-use tools are available. Explain that this is only to create the connector.
 12. Create an MCP connector named `Codex ChatGPT Bridge`.
 13. Use the local MCP URL, or the authenticated tunnel URL if a tunnel was needed.
 14. If ChatGPT supports HTTP Bearer / bearer API key, use `/mcp` and paste the bearer token through a safe local secret-input or clipboard path.
 15. If ChatGPT only offers OAuth / unauthenticated / mixed auth, use `/mcp/<connector-secret>` and choose unauthenticated. Treat the full URL as a secret.
-16. After connecting, verify the connector by asking ChatGPT to call `list_grants`. If the user requested `delegate` profile, verify with `bridge_status` instead because low-level grant tools are intentionally hidden.
-17. If browser automation or connector creation is blocked, tell the user exactly what remains: connector name, MCP URL, auth type, and the local command to display the token.
+16. Set the ChatGPT app permission policy to `Allow all actions` when the user explicitly requested local Codex delegation. For safer read-only installs, keep the least permissive policy that still allows the selected tools.
+17. After connecting, verify the connector by asking ChatGPT to call `list_grants`. If the user requested `delegate` profile, verify with `bridge_status` instead because low-level grant tools are intentionally hidden.
+18. Do not count a temporary `trycloudflare.com` quick tunnel as a completed install target. It
+    is acceptable for a short smoke test only. A successful install needs a stable tunnel URL
+    that can survive process restarts or be recreated through an explicit named tunnel profile.
+19. If browser automation or connector creation is blocked, tell the user exactly what remains: connector name, MCP URL, auth type, permission policy, and the local command to display the token or secret URL.
+
+## Tunnel Diagnosis
+
+Before blaming ChatGPT or the bridge for `Connection failed`, verify each layer:
+
+1. Local bridge health: `curl http://127.0.0.1:8766/healthz`.
+2. Local secret MCP endpoint: call `tools/list` on `/mcp/<connector-secret>` without printing
+   the secret URL in chat.
+3. Tunnel process logs. For Cloudflare quick tunnels, repeated `7844` timeouts mean the tunnel
+   is not connected to Cloudflare edge.
+4. ChatGPT app details. If the app still points at an old tunnel URL, refresh or recreate the
+   app after the new stable tunnel is running.
+5. Run `codex-chatgpt-bridge tunnel-doctor --url <connector-url> --log <tunnel-log>` locally.
+   It redacts connector secrets and flags quick tunnels, localhost URLs, and connection-failure
+   log patterns.
 
 ## Full Delegate Install
 
 Only do this when the user explicitly asks for all local files, all permissions, no local permission limits, or direct local Codex delegation.
+Run these mode/profile commands after install, reinstall, `init`, or any config regeneration. Do not
+assume the service is still in delegate mode until `bridge_status` proves it.
 
 1. Run `codex-chatgpt-bridge set-mode full_delegate`.
 2. Run `codex-chatgpt-bridge enable-codex-tasks`.
@@ -66,6 +90,14 @@ Only do this when the user explicitly asks for all local files, all permissions,
    ChatGPT may still ask for one host-level custom MCP approval for that action; do not make it chain `grant_path`, `read_file`, `write_file`, and session tools.
 8. If ChatGPT replies with `blocked_by_openai_safety_check` or says the tool call was blocked by OpenAI's safety check, report that as a ChatGPT host-layer block. The local bridge did not receive the request, and changing local grants or restarting the bridge will not fix that specific block.
 9. Tell the user that full delegate mode means ChatGPT can ask the local bridge to read/write local files and drive local Codex with broad execution rights, but ChatGPT web may still refuse to send destructive tool calls to the bridge.
+
+## ChatGPT Developer Mode Notes
+
+Developer Mode and MCP app availability can differ by account rollout and plan. In one tested
+ChatGPT Pro web account, `Settings -> Apps -> Advanced settings -> Developer mode` was visible,
+enabled, and allowed development apps with `Allow all actions`. Official Help Center and
+developer docs may describe different rollout boundaries, so installers should verify the
+actual account UI and tool-call result instead of assuming Pro is read-only or fully writable.
 
 ## Safety Rules For Installers
 

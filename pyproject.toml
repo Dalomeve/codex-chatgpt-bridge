@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "codex-chatgpt-bridge"
 version = "0.1.0"
-description = "A local MCP bridge that lets ChatGPT web sessions read approved local files and hand tasks to local Codex."
+description = "A local MCP bridge that lets ChatGPT web sessions inspect approved local files and delegate work to local Codex."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
